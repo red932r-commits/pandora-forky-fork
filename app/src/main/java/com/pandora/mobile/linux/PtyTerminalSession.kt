@@ -7,14 +7,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 import java.io.File
 
@@ -32,11 +33,9 @@ class PtyTerminalSession(
     private val _state = MutableStateFlow(State.PREPARING)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private val _output = MutableSharedFlow<ByteArray>(
-        extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val output: SharedFlow<ByteArray> = _output.asSharedFlow()
+    private val outputChannel = terminalOutputChannel()
+    val output: Flow<ByteArray> = outputChannel.receiveAsFlow()
+    private val writeMutex = Mutex()
 
     @Volatile private var masterFd = -1
     @Volatile private var childPid = 0
@@ -69,11 +68,11 @@ class PtyTerminalSession(
                 readerJob = scope.launch { readLoop(fd) }
                 scope.launch {
                     val status = PtyBridge.waitFor(outPid[0])
-                    _output.emit("\r\n[Process exited: $status]\r\n".toByteArray())
+                    outputChannel.send("\r\n[Process exited: $status]\r\n".toByteArray())
                     if (_state.value != State.FAILED) _state.value = State.STOPPED
                 }
             } catch (error: Throwable) {
-                _output.emit("Pandora terminal failed: ${error.message}\r\n".toByteArray())
+                outputChannel.send("Pandora terminal failed: ${error.message}\r\n".toByteArray())
                 _state.value = State.FAILED
             }
         }
@@ -82,13 +81,15 @@ class PtyTerminalSession(
     fun send(bytes: ByteArray) {
         if (bytes.isEmpty() || masterFd < 0) return
         scope.launch {
-            var offset = 0
-            while (offset < bytes.size) {
-                val length = minOf(2048, bytes.size - offset)
-                val written = PtyBridge.writeBytes(masterFd, bytes, offset, length)
-                if (written <= 0) return@launch
-                offset += written
-                if (offset < bytes.size) yield()
+            writeMutex.withLock {
+                var offset = 0
+                while (offset < bytes.size) {
+                    val length = minOf(2048, bytes.size - offset)
+                    val written = PtyBridge.writeBytes(masterFd, bytes, offset, length)
+                    if (written <= 0) return@withLock
+                    offset += written
+                    if (offset < bytes.size) yield()
+                }
             }
         }
     }
@@ -123,7 +124,7 @@ class PtyTerminalSession(
         while (_state.value == State.RUNNING) {
             val count = PtyBridge.readBytes(fd, buffer, 0, buffer.size)
             if (count <= 0) return
-            _output.emit(buffer.copyOf(count))
+            outputChannel.send(buffer.copyOf(count))
         }
     }
 
@@ -159,6 +160,8 @@ class PtyTerminalSession(
         "LANG" to "C.UTF-8",
     )
 }
+
+internal fun terminalOutputChannel(capacity: Int = 64): Channel<ByteArray> = Channel(capacity)
 
 internal fun terminalShellCommand(
     persistentSessionName: String?,

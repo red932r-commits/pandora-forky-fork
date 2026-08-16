@@ -157,7 +157,7 @@ class TerminalNativeView @JvmOverloads constructor(
     private var lastEmulatorVersion: Long = -1L
     private val emulatorTick = object : Runnable {
         override fun run() {
-            val v = emulator?.version?.value ?: -1L
+            val v = emulator?.version() ?: -1L
             if (v != lastEmulatorVersion) {
                 lastEmulatorVersion = v
                 invalidate()
@@ -184,7 +184,7 @@ class TerminalNativeView @JvmOverloads constructor(
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             // Tapping outside an active selection cancels it; otherwise pass focus.
-            if (emulator?.selectionRect?.value != null) {
+            if (emulator?.selectionRect() != null) {
                 emulator?.clearSelectionRect()
                 actionMode?.finish()
                 return true
@@ -277,7 +277,7 @@ class TerminalNativeView @JvmOverloads constructor(
                 val em = emulator ?: return false
                 return when (item.itemId) {
                     MENU_COPY -> {
-                        val sel = em.selectionRect.value
+                        val sel = em.selectionRect()
                         if (sel != null) {
                             val text = em.getSelectedText(sel[0], sel[1], sel[2], sel[3])
                             if (text.isNotEmpty()) {
@@ -303,7 +303,7 @@ class TerminalNativeView @JvmOverloads constructor(
             }
             override fun onGetContentRect(mode: ActionMode, view: View?, outRect: Rect) {
                 val em = emulator
-                val sel = em?.selectionRect?.value
+                val sel = em?.selectionRect()
                 if (sel == null) {
                     super.onGetContentRect(mode, view, outRect)
                     return
@@ -345,7 +345,7 @@ class TerminalNativeView @JvmOverloads constructor(
         }
 
         // Selection highlight.
-        val sel = em.selectionRect.value
+        val sel = em.selectionRect()
         if (sel != null) {
             val (sx, sy, ex, ey) = if (sel[1] < sel[3] || (sel[1] == sel[3] && sel[0] <= sel[2])) {
                 intArrayOf(sel[0], sel[1], sel[2], sel[3])

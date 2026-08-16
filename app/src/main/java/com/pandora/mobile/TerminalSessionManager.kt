@@ -31,6 +31,7 @@ class ManagedTerminalSession internal constructor(
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val outputScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val pty = PtyTerminalSession(appContext, persistentSessionName)
     val emulator = TerminalEmulator()
     val state: StateFlow<PtyTerminalSession.State> = pty.state
@@ -44,10 +45,10 @@ class ManagedTerminalSession internal constructor(
 
     init {
         emulator.onResponse = pty::send
-        scope.launch {
+        outputScope.launch {
             pty.output.collect { bytes ->
                 emulator.feed(bytes)
-                inspectLoginOutput(bytes)
+                scope.launch { inspectLoginOutput(bytes) }
             }
         }
         scope.launch {
@@ -75,6 +76,7 @@ class ManagedTerminalSession internal constructor(
     fun stop(killPersistent: Boolean = true): Thread? {
         pty.stop()
         scope.cancel()
+        outputScope.cancel()
         return if (killPersistent) {
             thread(name = "zmx-kill-$persistentSessionName", isDaemon = true) {
                 runCatching {
@@ -100,6 +102,7 @@ class ManagedTerminalSession internal constructor(
     internal suspend fun awaitStopped() {
         pty.awaitStopped()
         scope.coroutineContext[Job]?.join()
+        outputScope.coroutineContext[Job]?.join()
     }
 
     private fun inspectLoginOutput(bytes: ByteArray) {

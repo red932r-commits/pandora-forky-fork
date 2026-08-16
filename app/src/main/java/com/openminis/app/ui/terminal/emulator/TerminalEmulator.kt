@@ -1,17 +1,17 @@
 package com.openminis.app.ui.terminal.emulator
 
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.State
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Core terminal emulator — connects AnsiParser → TerminalBuffer, handles every CSI/ESC/OSC
  * sequence. Port of iOS TerminalEmulator.swift.
  *
- * Bump [version] for Compose redraws; each [feed] batches a single bump.
+ * Bump the version counter for native-view redraws; each [feed] batches one bump.
  */
 class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
-    private val _version = mutableStateOf(0L)
-    val version: State<Long> = _version
+    private val version = AtomicLong()
+
+    fun version(): Long = version.get()
 
     val primaryBuffer = TerminalBuffer(cols, rows, maxScrollback = 2000)
     val alternateBuffer = TerminalBuffer(cols, rows, maxScrollback = 0).also { it.scrollbackEnabled = false }
@@ -23,22 +23,22 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
 
     private val parser = AnsiParser()
 
-    var applicationCursorKeys: Boolean = false
+    @Volatile var applicationCursorKeys: Boolean = false
         private set
-    var autoWrap: Boolean = true
+    @Volatile var autoWrap: Boolean = true
         private set
-    var cursorVisible: Boolean = true
+    @Volatile var cursorVisible: Boolean = true
         private set
-    var bracketedPaste: Boolean = false
+    @Volatile var bracketedPaste: Boolean = false
         private set
-    var applicationKeypad: Boolean = false
+    @Volatile var applicationKeypad: Boolean = false
         private set
-    var originMode: Boolean = false
+    @Volatile var originMode: Boolean = false
         private set
-    var cursorShape: CursorShape = CursorShape.BLOCK
+    @Volatile var cursorShape: CursorShape = CursorShape.BLOCK
         private set
 
-    var title: String = ""
+    @Volatile var title: String = ""
         private set
 
     /** Callback for terminal responses (DSR, DA). */
@@ -47,11 +47,13 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
     private val cursorStyle = CursorStyle()
 
     var scrollOffset: Int = 0
+        @Synchronized get
+        @Synchronized
         set(value) {
             val clamped = value.coerceIn(0, activeBuffer.scrollback.size)
             if (field != clamped) {
                 field = clamped
-                _version.value = _version.value + 1
+                version.incrementAndGet()
             }
         }
 
@@ -61,15 +63,17 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
         private set
 
     /** Feed raw bytes from the PTY. */
+    @Synchronized
     fun feed(bytes: ByteArray, len: Int = bytes.size) {
         parser.feed(bytes, len) { handleAction(it) }
-        _version.value = _version.value + 1
+        version.incrementAndGet()
     }
 
     /** Return exactly [rows] lines to display, applying scrollOffset. */
+    @Synchronized
     fun visibleLines(): List<Array<TerminalCell>> {
         val buf = activeBuffer
-        if (scrollOffset == 0) return buf.grid.toList()
+        if (scrollOffset == 0) return buf.grid.map { it.copyOf() }
         val scrollbackCount = buf.scrollback.size
         val totalLines = scrollbackCount + buf.grid.size
         val viewStart = maxOf(0, totalLines - rows - scrollOffset)
@@ -83,12 +87,12 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
                     } else if (line.size > cols) {
                         Array(cols) { idx -> line[idx] }
                     } else line
-                    result.add(padded)
+                    result.add(padded.copyOf())
                 }
                 else -> {
                     val gridRow = i - scrollbackCount
                     result.add(
-                        if (gridRow < buf.grid.size) buf.grid[gridRow]
+                        if (gridRow < buf.grid.size) buf.grid[gridRow].copyOf()
                         else Array(cols) { TerminalCell.BLANK }
                     )
                 }
@@ -97,18 +101,21 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
         return result
     }
 
+    @Synchronized
     fun resize(newCols: Int, newRows: Int) {
         if (newCols <= 0 || newRows <= 0) return
         if (newCols == cols && newRows == rows) return
         cols = newCols; rows = newRows
         primaryBuffer.resize(newCols, newRows)
         alternateBuffer.resize(newCols, newRows)
-        _version.value = _version.value + 1
+        version.incrementAndGet()
     }
 
     /** Current cursor position (in active buffer). */
+    @Synchronized
     fun cursorPos(): Pair<Int, Int> = activeBuffer.cursorCol to activeBuffer.cursorRow
 
+    @Synchronized
     fun currentCursorStyle(): CursorStyle = cursorStyle.copy()
 
     // ── Text selection (T194 groundwork) ───────────────────────────────────
@@ -121,21 +128,25 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
     // We deliberately keep this state inside the emulator (rather than the
     // view) so renderer + selection-text-extract see a consistent snapshot
     // and a redraw triggered by [setSelectionRect] flows through the
-    // existing `version` State the Compose canvas already observes.
+    // existing version counter observed by the native terminal view.
 
     /** Active selection rect, or null. (col1,row1) is start, (col2,row2) is end. */
-    private val _selectionRect = mutableStateOf<IntArray?>(null)
-    val selectionRect: State<IntArray?> = _selectionRect
+    private var selectionRect: IntArray? = null
 
+    @Synchronized
+    fun selectionRect(): IntArray? = selectionRect?.copyOf()
+
+    @Synchronized
     fun setSelectionRect(col1: Int, row1: Int, col2: Int, row2: Int) {
-        _selectionRect.value = intArrayOf(col1, row1, col2, row2)
-        _version.value = _version.value + 1
+        selectionRect = intArrayOf(col1, row1, col2, row2)
+        version.incrementAndGet()
     }
 
+    @Synchronized
     fun clearSelectionRect() {
-        if (_selectionRect.value != null) {
-            _selectionRect.value = null
-            _version.value = _version.value + 1
+        if (selectionRect != null) {
+            selectionRect = null
+            version.incrementAndGet()
         }
     }
 
@@ -146,6 +157,7 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
      * Trailing spaces on each line are trimmed (matches Termux behaviour and
      * what users expect when they grab a URL by long-pressing).
      */
+    @Synchronized
     fun getSelectedText(col1: Int, row1: Int, col2: Int, row2: Int): String {
         val lines = visibleLines()
         if (lines.isEmpty()) return ""
