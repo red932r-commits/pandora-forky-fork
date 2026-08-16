@@ -9,6 +9,7 @@ import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
@@ -19,16 +20,52 @@ import java.util.zip.ZipOutputStream
 class WorkspaceBackup(private val filesDir: File) {
     data class Result(val files: Int, val bytes: Long)
 
+    data class Progress(
+        val completedBytes: Long,
+        val totalBytes: Long,
+        val completedFiles: Int,
+        val totalFiles: Int,
+    ) {
+        val fraction: Float
+            get() = when {
+                totalBytes > 0 -> (completedBytes.toDouble() / totalBytes).toFloat().coerceIn(0f, 1f)
+                totalFiles > 0 -> (completedFiles.toFloat() / totalFiles).coerceIn(0f, 1f)
+                else -> 1f
+            }
+    }
+
     private val workspace = File(filesDir, "linux-workspace")
     private val previousWorkspace = File(filesDir, PREVIOUS_WORKSPACE)
     private val restoreMarker = File(filesDir, RESTORE_MARKER)
 
-    fun write(output: OutputStream): Result {
+    fun write(
+        output: OutputStream,
+        onProgress: (Progress) -> Unit = {},
+    ): Result {
         check(workspace.isDirectory) { "The Linux workspace has not been created yet" }
+        val totals = measureWorkspace()
         var fileCount = 0
         var byteCount = 0L
+        var lastProgressNanos = 0L
         val symlinks = mutableListOf<Pair<String, String>>()
         val executables = mutableListOf<String>()
+
+        fun reportProgress(force: Boolean = false) {
+            val now = System.nanoTime()
+            if (force || now - lastProgressNanos >= PROGRESS_INTERVAL_NANOS) {
+                onProgress(
+                    Progress(
+                        completedBytes = byteCount.coerceAtMost(totals.bytes),
+                        totalBytes = totals.bytes,
+                        completedFiles = fileCount.coerceAtMost(totals.files),
+                        totalFiles = totals.files,
+                    ),
+                )
+                lastProgressNanos = now
+            }
+        }
+
+        reportProgress(force = true)
 
         ZipOutputStream(BufferedOutputStream(output)).use { zip ->
             zip.putText(MANIFEST, "format=1\nroot=linux-workspace\n")
@@ -48,11 +85,18 @@ class WorkspaceBackup(private val filesDir: File) {
                         Files.isRegularFile(path) -> {
                             zip.putNextEntry(ZipEntry(archivePath).apply { time = path.toFile().lastModified() })
                             Files.newInputStream(path).use { input ->
-                                val copied = input.copyTo(zip)
-                                byteCount += copied
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    zip.write(buffer, 0, count)
+                                    byteCount += count
+                                    reportProgress()
+                                }
                             }
                             zip.closeEntry()
                             fileCount++
+                            reportProgress()
                             if (Files.isExecutable(path)) executables += relative
                         }
                     }
@@ -61,7 +105,22 @@ class WorkspaceBackup(private val filesDir: File) {
             zip.putText(SYMLINKS, symlinks.joinToString("") { encode(it.first) + "\t" + encode(it.second) + "\n" })
             zip.putText(EXECUTABLES, executables.joinToString("") { encode(it) + "\n" })
         }
+        reportProgress(force = true)
         return Result(fileCount, byteCount)
+    }
+
+    private fun measureWorkspace(): Result {
+        var files = 0
+        var bytes = 0L
+        Files.walk(workspace.toPath()).use { paths ->
+            paths.forEach { path ->
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    files++
+                    bytes += Files.size(path)
+                }
+            }
+        }
+        return Result(files, bytes)
     }
 
     @Synchronized
@@ -246,5 +305,6 @@ class WorkspaceBackup(private val filesDir: File) {
         private const val PREVIOUS_WORKSPACE = "linux-workspace-restore-previous"
         private const val RESTORE_MARKER = "linux-workspace-restore-in-progress"
         private const val RESTORE_STAGING_PREFIX = ".workspace-restore-"
+        private const val PROGRESS_INTERVAL_NANOS = 100_000_000L
     }
 }

@@ -73,6 +73,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.RootfsInstaller
+import com.pandora.mobile.linux.WorkspaceBackup
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -105,6 +106,7 @@ fun SettingsScreen(
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupStatus by remember { mutableStateOf<String?>(null) }
+    var backupProgress by remember { mutableStateOf<WorkspaceBackup.Progress?>(null) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var showRepair by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf(false) }
@@ -126,19 +128,26 @@ fun SettingsScreen(
         if (uri != null) {
             backupBusy = true
             backupStatus = "Saving backup…"
+            backupProgress = null
             scope.launch {
                 val result = runCatching {
-                    workspaceCoordinator.createBackup {
-                        checkNotNull(context.contentResolver.openOutputStream(uri, "w")) {
-                            "Could not open the selected file"
-                        }
-                    }
+                    workspaceCoordinator.createBackup(
+                        openOutput = {
+                            checkNotNull(context.contentResolver.openOutputStream(uri, "w")) {
+                                "Could not open the selected file"
+                            }
+                        },
+                        onProgress = { progress ->
+                            scope.launch { backupProgress = progress }
+                        },
+                    )
                 }
                 result.onSuccess {
                     backupStatus = "Backup saved · ${it.files} files · ${formatBytes(it.bytes)}"
                 }.onFailure {
                     runCatching { context.contentResolver.delete(uri, null, null) }
                     backupStatus = "Backup failed: ${it.message}"
+                    backupProgress = null
                 }
                 backupBusy = false
             }
@@ -467,6 +476,7 @@ fun SettingsScreen(
                 icon = { tint -> Icon(Icons.Rounded.Download, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
                 enabled = !backupBusy,
                 onClick = {
+                    backupProgress = null
                     val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
                     createBackup.launch("pandora-backup-$stamp.zip")
                 },
@@ -487,16 +497,34 @@ fun SettingsScreen(
             )
             if (backupStatus != null || backupBusy) {
                 Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (backupBusy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = SettingsAccent,
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(9.dp))
+                val progress = backupProgress
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (backupBusy && progress == null) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = SettingsAccent,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(9.dp))
+                        }
+                        Text(backupStatus.orEmpty(), color = SettingsMuted, fontSize = 13.sp)
                     }
-                    Text(backupStatus.orEmpty(), color = SettingsMuted, fontSize = 13.sp)
+                    if (progress != null) {
+                        Spacer(Modifier.height(9.dp))
+                        LinearProgressIndicator(
+                            progress = { progress.fraction },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                            color = SettingsAccent,
+                            trackColor = SettingsLine,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            backupProgressLabel(progress),
+                            color = SettingsMuted,
+                            fontSize = 11.sp,
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -520,6 +548,7 @@ fun SettingsScreen(
                         val uri = restoreUri ?: return@TextButton
                         backupBusy = true
                         backupStatus = "Restoring backup…"
+                        backupProgress = null
                         scope.launch {
                             val result = runCatching {
                                 workspaceCoordinator.restoreBackup {
@@ -1044,6 +1073,15 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 -> "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024))
     bytes >= 1024L -> "%.1f KB".format(Locale.US, bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun backupProgressLabel(progress: WorkspaceBackup.Progress): String {
+    val percent = (progress.fraction * 100).roundToInt()
+    return if (progress.totalBytes > 0) {
+        "$percent% · ${formatBytes(progress.completedBytes)} of ${formatBytes(progress.totalBytes)}"
+    } else {
+        "$percent% · ${progress.completedFiles} of ${progress.totalFiles} files"
+    }
 }
 
 @Composable

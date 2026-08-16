@@ -20,9 +20,14 @@ class WorkspaceCoordinator(
 
     fun recoverInterruptedRestore() = backup.recoverInterruptedRestore()
 
-    suspend fun createBackup(openOutput: () -> OutputStream): WorkspaceBackup.Result =
+    suspend fun createBackup(
+        openOutput: () -> OutputStream,
+        onProgress: (WorkspaceBackup.Progress) -> Unit = {},
+    ): WorkspaceBackup.Result =
         withQuiescedWorkspace {
-            withContext(Dispatchers.IO) { openOutput().use(backup::write) }
+            withContext(Dispatchers.IO) {
+                openOutput().use { output -> backup.write(output, onProgress) }
+            }
         }
 
     suspend fun restoreBackup(openInput: () -> InputStream): WorkspaceBackup.Result =

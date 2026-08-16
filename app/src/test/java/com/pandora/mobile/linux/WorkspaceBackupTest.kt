@@ -27,7 +27,21 @@ class WorkspaceBackupTest {
 
             val archive = ByteArrayOutputStream()
             val backup = WorkspaceBackup(filesDir)
-            backup.write(archive)
+            val progress = mutableListOf<WorkspaceBackup.Progress>()
+            val result = backup.write(archive, progress::add)
+
+            assertTrue(progress.size >= 2)
+            assertEquals(0L, progress.first().completedBytes)
+            assertEquals(0, progress.first().completedFiles)
+            assertEquals(result.bytes, progress.last().completedBytes)
+            assertEquals(result.bytes, progress.last().totalBytes)
+            assertEquals(result.files, progress.last().completedFiles)
+            assertEquals(result.files, progress.last().totalFiles)
+            assertEquals(1f, progress.last().fraction)
+            assertTrue(progress.zipWithNext().all { (previous, next) ->
+                previous.completedBytes <= next.completedBytes &&
+                    previous.completedFiles <= next.completedFiles
+            })
 
             filesDir.resolve("linux-workspace").deleteRecursively()
             filesDir.resolve("linux-workspace").mkdirs()
