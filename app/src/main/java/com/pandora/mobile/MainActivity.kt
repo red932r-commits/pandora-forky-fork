@@ -157,10 +157,12 @@ import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.CodexUsageReader
 import com.pandora.mobile.linux.ArchiveCatalog
+import com.pandora.mobile.linux.ArchivedWorkspace
 import com.pandora.mobile.linux.agentDisplayText
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
+import com.pandora.mobile.linux.WorkspaceCatalogRepository
 import com.pandora.mobile.linux.RootfsInstaller
 import com.pandora.mobile.linux.ZmxSessionCatalog
 import java.text.SimpleDateFormat
@@ -1152,11 +1154,21 @@ private fun HomeScreen(
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
     val projectCatalog = remember(context) { ProjectCatalog(context) }
     val archiveCatalog = remember(context) { ArchiveCatalog(context) }
+    val catalogRepository = remember(context) { WorkspaceCatalogRepository(context) }
+    val initialChats = remember(chatCatalog) { runCatching(chatCatalog::readCached) }
+    val initialProjects = remember(projectCatalog) { runCatching(projectCatalog::readRegistered) }
+    val initialArchive = remember(archiveCatalog) { runCatching(archiveCatalog::read) }
     var limitState by remember { mutableStateOf<CodexLimitsState>(CodexLimitsState.Loading) }
     var limitRefresh by remember { mutableStateOf(0) }
-    var chats by remember(chatCatalog) { mutableStateOf(chatCatalog.readCached()) }
-    var registeredProjects by remember(projectCatalog) { mutableStateOf(projectCatalog.readRegistered()) }
-    var archive by remember(archiveCatalog) { mutableStateOf(archiveCatalog.read()) }
+    var chats by remember(chatCatalog) { mutableStateOf(initialChats.getOrDefault(emptyList())) }
+    var registeredProjects by remember(projectCatalog) { mutableStateOf(initialProjects.getOrDefault(emptyList())) }
+    var archive by remember(archiveCatalog) { mutableStateOf(initialArchive.getOrDefault(ArchivedWorkspace())) }
+    var catalogError by remember {
+        mutableStateOf(
+            listOf(initialChats, initialProjects, initialArchive)
+                .firstNotNullOfOrNull { it.exceptionOrNull()?.message },
+        )
+    }
     var persistentTerminals by remember { mutableStateOf<List<String>>(emptyList()) }
     var catalogLoading by remember { mutableStateOf(chats.isEmpty()) }
     var renameEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
@@ -1176,6 +1188,9 @@ private fun HomeScreen(
     LaunchedEffect(limitRefresh, sessions.size) {
         limitState = CodexLimitsState.Loading
         catalogLoading = chats.isEmpty()
+        catalogError = null
+        withContext(Dispatchers.IO) { runCatching(catalogRepository::recoverPendingDeletion) }
+            .onFailure { catalogError = it.message ?: "Could not finish a pending catalog update" }
         val loaded = withContext(Dispatchers.IO) {
             coroutineScope {
                 val usage = async {
@@ -1190,8 +1205,12 @@ private fun HomeScreen(
         limitState = loaded.first
         loaded.second?.let { chats = it }
         loaded.third?.let { persistentTerminals = it }
-        registeredProjects = withContext(Dispatchers.IO) { projectCatalog.readRegistered() }
-        archive = withContext(Dispatchers.IO) { archiveCatalog.read() }
+        withContext(Dispatchers.IO) { runCatching(projectCatalog::readRegistered) }
+            .onSuccess { registeredProjects = it }
+            .onFailure { catalogError = it.message ?: "Could not read the project catalog" }
+        withContext(Dispatchers.IO) { runCatching(archiveCatalog::read) }
+            .onSuccess { archive = it }
+            .onFailure { catalogError = it.message ?: "Could not read the archive catalog" }
         catalogLoading = false
     }
 
@@ -1307,6 +1326,17 @@ private fun HomeScreen(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            if (catalogError != null) {
+                item("catalog-error") {
+                    Text(
+                        catalogError.orEmpty(),
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                }
+            }
             item("projects-heading") {
                 WorkspaceSectionHeading(
                     label = "PROJECTS",
@@ -1564,10 +1594,7 @@ private fun HomeScreen(
                     projectChatIds.forEach(onStopChat)
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
-                            projectChatIds.forEach(chatCatalog::delete)
-                            projectCatalog.remove(project.path)
-                            archiveCatalog.setProjectArchived(project.path, false)
-                            archiveCatalog.removeChats(projectChatIds)
+                            catalogRepository.deleteProject(project.path, projectChatIds)
                         }
                     }
                     actionInFlight = false
@@ -1687,8 +1714,7 @@ private fun HomeScreen(
                     onStopChat(chat.id)
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
-                            chatCatalog.delete(chat.id)
-                            archiveCatalog.setChatArchived(chat.id, false)
+                            catalogRepository.deleteChat(chat.id)
                         }
                     }
                     actionInFlight = false

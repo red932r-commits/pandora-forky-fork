@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,10 +48,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.ArchiveCatalog
+import com.pandora.mobile.linux.ArchivedWorkspace
 import com.pandora.mobile.linux.CodexThreadCatalog
 import com.pandora.mobile.linux.CodexThreadSummary
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
+import com.pandora.mobile.linux.WorkspaceCatalogRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,13 +69,39 @@ fun ArchiveScreen(onBack: () -> Unit) {
     val archiveCatalog = remember(context) { ArchiveCatalog(context) }
     val projectCatalog = remember(context) { ProjectCatalog(context) }
     val chatCatalog = remember(context) { CodexThreadCatalog(context) }
-    var archive by remember { mutableStateOf(archiveCatalog.read()) }
-    var projects by remember { mutableStateOf(projectCatalog.readRegistered()) }
-    var chats by remember { mutableStateOf(chatCatalog.readCached()) }
+    val catalogRepository = remember(context) { WorkspaceCatalogRepository(context) }
+    val initialArchive = remember(archiveCatalog) { runCatching(archiveCatalog::read) }
+    val initialProjects = remember(projectCatalog) { runCatching(projectCatalog::readRegistered) }
+    val initialChats = remember(chatCatalog) { runCatching(chatCatalog::readCached) }
+    var archive by remember { mutableStateOf(initialArchive.getOrDefault(ArchivedWorkspace())) }
+    var projects by remember { mutableStateOf(initialProjects.getOrDefault(emptyList())) }
+    var chats by remember { mutableStateOf(initialChats.getOrDefault(emptyList())) }
     var busyKey by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<ArchiveDeleteTarget?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember {
+        mutableStateOf(
+            listOf(initialArchive, initialProjects, initialChats)
+                .firstNotNullOfOrNull { it.exceptionOrNull()?.message },
+        )
+    }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                catalogRepository.recoverPendingDeletion()?.let { recovered ->
+                    Triple(recovered, projectCatalog.readRegistered(), chatCatalog.readCached())
+                }
+            }
+        }.onSuccess { recovered ->
+            if (recovered != null) {
+                archive = recovered.first
+                projects = recovered.second
+                chats = recovered.third
+            }
+        }
+            .onFailure { error = it.message ?: "Could not finish a pending catalog update" }
+    }
 
     val archivedProjects = remember(archive, projects) {
         val registered = projects.associateBy { it.path }
@@ -106,7 +135,7 @@ fun ArchiveScreen(onBack: () -> Unit) {
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
 
-        if (archivedProjects.isEmpty() && archivedChats.isEmpty()) {
+        if (archivedProjects.isEmpty() && archivedChats.isEmpty() && error == null) {
             Column(
                 Modifier.fillMaxSize().padding(horizontal = 34.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -228,14 +257,10 @@ fun ArchiveScreen(onBack: () -> Unit) {
                                     when (target) {
                                         is ArchiveDeleteTarget.Project -> {
                                             val ids = chats.filter { it.cwd == target.project.path }.map { it.id }
-                                            ids.forEach(chatCatalog::delete)
-                                            projectCatalog.remove(target.project.path)
-                                            archiveCatalog.setProjectArchived(target.project.path, false)
-                                            archiveCatalog.removeChats(ids)
+                                            catalogRepository.deleteProject(target.project.path, ids)
                                         }
                                         is ArchiveDeleteTarget.Chat -> {
-                                            chatCatalog.delete(target.chat.id)
-                                            archiveCatalog.setChatArchived(target.chat.id, false)
+                                            catalogRepository.deleteChat(target.chat.id)
                                         }
                                     }
                                 }

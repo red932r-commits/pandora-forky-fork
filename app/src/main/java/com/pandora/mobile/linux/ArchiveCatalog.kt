@@ -13,15 +13,10 @@ data class ArchivedWorkspace(
 /** Durable, Pandora-local archive state. Archiving never removes Codex threads or project files. */
 class ArchiveCatalog(context: Context) {
     private val file = File(context.filesDir, "linux-workspace/.pandora/archive.json")
+    private val storage = DurableCatalogFile(file)
 
     fun read(): ArchivedWorkspace = synchronized(LOCK) {
-        runCatching {
-            val data = JSONObject(file.readText())
-            ArchivedWorkspace(
-                projectPaths = data.optJSONArray("projectPaths").toStringSet(),
-                chatIds = data.optJSONArray("chatIds").toStringSet(),
-            )
-        }.getOrDefault(ArchivedWorkspace())
+        storage.read(ArchivedWorkspace(), ::parse)
     }
 
     fun setProjectArchived(path: String, archived: Boolean): ArchivedWorkspace = synchronized(LOCK) {
@@ -47,20 +42,26 @@ class ArchiveCatalog(context: Context) {
     }
 
     private fun write(archive: ArchivedWorkspace) {
-        file.parentFile?.mkdirs()
         val data = JSONObject()
             .put("projectPaths", JSONArray(archive.projectPaths.sorted()))
             .put("chatIds", JSONArray(archive.chatIds.sorted()))
-        val temporary = File(file.parentFile, "${file.name}.tmp")
-        temporary.writeText(data.toString())
-        if (!temporary.renameTo(file)) temporary.copyTo(file, overwrite = true)
-        temporary.delete()
+        storage.write(data.toString()) { parse(it) }
     }
 
-    private fun JSONArray?.toStringSet(): Set<String> = buildSet {
-        val values = this@toStringSet ?: return@buildSet
+    private fun parse(text: String): ArchivedWorkspace {
+        val data = JSONObject(text)
+        return ArchivedWorkspace(
+            projectPaths = data.getJSONArray("projectPaths").toStringSet(),
+            chatIds = data.getJSONArray("chatIds").toStringSet(),
+        )
+    }
+
+    private fun JSONArray.toStringSet(): Set<String> = buildSet {
+        val values = this@toStringSet
         for (index in 0 until values.length()) {
-            values.optString(index).takeIf(String::isNotBlank)?.let(::add)
+            val value = values.getString(index)
+            require(value.isNotBlank()) { "Archive contains an empty identifier" }
+            add(value)
         }
     }
 

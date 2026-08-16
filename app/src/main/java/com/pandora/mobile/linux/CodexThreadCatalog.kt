@@ -22,25 +22,10 @@ class CodexThreadCatalog(context: Context) {
     private val installer = RootfsInstaller(context.applicationContext)
     private val registry = PandoraChatRegistry(context.applicationContext)
     private val cache = File(installer.workspace, ".pandora/chat-list-cache.json")
+    private val cacheStorage = DurableCatalogFile(cache)
 
     fun readCached(): List<CodexThreadSummary> = synchronized(CACHE_LOCK) {
-        runCatching {
-            val data = JSONArray(cache.readText())
-            buildList {
-                for (index in 0 until data.length()) {
-                    val item = data.getJSONObject(index)
-                    add(
-                        CodexThreadSummary(
-                            id = item.getString("id"),
-                            title = item.getString("title"),
-                            preview = item.optString("preview"),
-                            updatedAtMillis = item.getLong("updatedAtMillis"),
-                            cwd = item.optString("cwd", "/root").ifBlank { "/root" },
-                        ),
-                    )
-                }
-            }
-        }.getOrDefault(emptyList())
+        cacheStorage.read(emptyList(), ::parseCache)
     }
 
     fun read(): List<CodexThreadSummary> {
@@ -137,7 +122,19 @@ class CodexThreadCatalog(context: Context) {
     }
 
     fun delete(threadId: String) {
-        request("thread/delete", JSONObject().put("threadId", threadId))
+        runCatching {
+            request("thread/delete", JSONObject().put("threadId", threadId))
+        }.onFailure { error ->
+            val detail = error.message.orEmpty()
+            val alreadyAbsent = detail.contains("not found", ignoreCase = true) ||
+                detail.contains("does not exist", ignoreCase = true) ||
+                detail.contains("unknown thread", ignoreCase = true)
+            if (!alreadyAbsent) throw error
+        }
+        forget(threadId)
+    }
+
+    internal fun forget(threadId: String) {
         registry.remove(threadId)
         writeCache(readCached().filterNot { it.id == threadId })
     }
@@ -202,11 +199,25 @@ class CodexThreadCatalog(context: Context) {
                     .put("cwd", thread.cwd),
             )
         }
-        cache.parentFile?.mkdirs()
-        val temporary = File(cache.parentFile, "${cache.name}.tmp")
-        temporary.writeText(data.toString())
-        if (!temporary.renameTo(cache)) temporary.copyTo(cache, overwrite = true)
-        temporary.delete()
+        cacheStorage.write(data.toString()) { parseCache(it) }
+    }
+
+    private fun parseCache(text: String): List<CodexThreadSummary> {
+        val data = JSONArray(text)
+        return buildList {
+            for (index in 0 until data.length()) {
+                val item = data.getJSONObject(index)
+                add(
+                    CodexThreadSummary(
+                        id = item.getString("id").also { require(it.isNotBlank()) },
+                        title = item.getString("title"),
+                        preview = item.optString("preview"),
+                        updatedAtMillis = item.getLong("updatedAtMillis"),
+                        cwd = item.optString("cwd", "/root").ifBlank { "/root" },
+                    ),
+                )
+            }
+        }
     }
 
     private companion object {

@@ -21,28 +21,11 @@ data class PandoraProject(
 class ProjectCatalog(context: Context) {
     private val installer = RootfsInstaller(context.applicationContext)
     private val registry = File(installer.workspace, ".pandora/projects.json")
+    private val storage = DurableCatalogFile(registry)
     private val projectsDirectory = File(installer.workspace, "projects")
 
     fun readRegistered(): List<PandoraProject> = synchronized(LOCK) {
-        runCatching {
-            val paths = JSONArray(registry.readText())
-            buildList {
-                for (index in 0 until paths.length()) {
-                    when (val item = paths.opt(index)) {
-                        is String -> item.takeIf(::isProjectPath)?.let { add(PandoraProject(it)) }
-                        is JSONObject -> item.optString("path").takeIf(::isProjectPath)?.let { path ->
-                            add(
-                                PandoraProject(
-                                    path = path,
-                                    customName = if (item.isNull("name")) null else item.optString("name").ifBlank { null },
-                                    pinned = item.optBoolean("pinned"),
-                                ),
-                            )
-                        }
-                    }
-                }
-            }.distinctBy { it.path }
-        }.getOrDefault(emptyList())
+        storage.read(emptyList(), ::parse)
     }
 
     /** Shows real project folders without exposing Pandora's internal workspace state. */
@@ -129,7 +112,6 @@ class ProjectCatalog(context: Context) {
     }
 
     private fun write(projects: List<PandoraProject>) {
-        registry.parentFile?.mkdirs()
         val data = JSONArray()
         projects.forEach { project ->
             data.put(
@@ -139,10 +121,33 @@ class ProjectCatalog(context: Context) {
                     .put("pinned", project.pinned),
             )
         }
-        val temporary = File(registry.parentFile, "${registry.name}.tmp")
-        temporary.writeText(data.toString())
-        if (!temporary.renameTo(registry)) temporary.copyTo(registry, overwrite = true)
-        temporary.delete()
+        storage.write(data.toString()) { parse(it) }
+    }
+
+    private fun parse(text: String): List<PandoraProject> {
+        val paths = JSONArray(text)
+        return buildList {
+            for (index in 0 until paths.length()) {
+                when (val item = paths.get(index)) {
+                    is String -> {
+                        require(isProjectPath(item)) { "Invalid project path at index $index" }
+                        add(PandoraProject(item))
+                    }
+                    is JSONObject -> {
+                        val path = item.getString("path")
+                        require(isProjectPath(path)) { "Invalid project path at index $index" }
+                        add(
+                            PandoraProject(
+                                path = path,
+                                customName = if (item.isNull("name")) null else item.getString("name").ifBlank { null },
+                                pinned = item.optBoolean("pinned"),
+                            ),
+                        )
+                    }
+                    else -> error("Invalid project entry at index $index")
+                }
+            }
+        }.distinctBy { it.path }
     }
 
     private fun validateFolderName(value: String): String {

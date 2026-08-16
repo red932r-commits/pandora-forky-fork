@@ -1,6 +1,8 @@
 package com.pandora.mobile.linux
 
 import java.io.File
+import java.io.StringReader
+import java.io.StringWriter
 import java.util.Properties
 
 /** Pandora-owned attachment metadata that Codex thread history does not preserve for generic files. */
@@ -88,18 +90,14 @@ internal class ChatAttachmentIndex(private val workspace: File) {
         return File(directory, "$safeId.properties")
     }
 
-    private fun read(file: File): Properties = Properties().apply {
-        if (file.isFile) file.inputStream().buffered().use(::load)
-    }
+    private fun read(file: File): Properties = DurableCatalogFile(file).read(Properties(), ::parse)
 
     private fun writeAtomically(file: File, values: Properties) {
-        val temporary = File(file.parentFile, "${file.name}.tmp")
-        temporary.outputStream().buffered().use { values.store(it, "Pandora chat attachment index") }
-        check(temporary.renameTo(file) || runCatching {
-            temporary.copyTo(file, overwrite = true)
-            temporary.delete()
-        }.isSuccess) { "Could not persist attachment metadata" }
+        val text = StringWriter().also { values.store(it, "Pandora chat attachment index") }.toString()
+        DurableCatalogFile(file).write(text) { parse(it) }
     }
+
+    private fun parse(text: String): Properties = Properties().apply { load(StringReader(text)) }
 
     private fun Properties.toAttachment(workspace: File, prefix: String): ChatAttachment? {
         val path = getProperty("${prefix}containerPath").orEmpty()
