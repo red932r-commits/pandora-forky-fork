@@ -73,7 +73,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.RootfsInstaller
-import com.pandora.mobile.linux.WorkspaceBackup
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -112,7 +111,9 @@ fun SettingsScreen(
     var repairStatus by remember { mutableStateOf<String?>(null) }
     var repairError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val backup = remember { WorkspaceBackup(context.filesDir, context.cacheDir) }
+    val workspaceCoordinator = remember {
+        (context.applicationContext as PandoraApplication).workspaceCoordinator
+    }
     val codexInstalled = remember { File(context.filesDir, "linux-workspace/.local/bin/codex").exists() }
     val codexSignedIn = remember { File(context.filesDir, "linux-workspace/.codex/auth.json").exists() }
     val savedCustomProvider = remember(context) { ModelProviderSettings.savedCustomProvider(context) }
@@ -127,11 +128,10 @@ fun SettingsScreen(
             backupStatus = "Saving backup…"
             scope.launch {
                 val result = runCatching {
-                    withContext(Dispatchers.IO) {
-                        val output = checkNotNull(context.contentResolver.openOutputStream(uri, "w")) {
+                    workspaceCoordinator.createBackup {
+                        checkNotNull(context.contentResolver.openOutputStream(uri, "w")) {
                             "Could not open the selected file"
                         }
-                        output.use(backup::write)
                     }
                 }
                 result.onSuccess {
@@ -463,7 +463,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(14.dp))
             SettingsAction(
                 title = "Save backup",
-                subtitle = "Export the persistent workspace as a portable ZIP",
+                subtitle = "Stop active sessions and export a consistent portable ZIP",
                 icon = { tint -> Icon(Icons.Rounded.Download, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
                 enabled = !backupBusy,
                 onClick = {
@@ -522,11 +522,10 @@ fun SettingsScreen(
                         backupStatus = "Restoring backup…"
                         scope.launch {
                             val result = runCatching {
-                                withContext(Dispatchers.IO) {
-                                    val input = checkNotNull(context.contentResolver.openInputStream(uri)) {
+                                workspaceCoordinator.restoreBackup {
+                                    checkNotNull(context.contentResolver.openInputStream(uri)) {
                                         "Could not open the selected backup"
                                     }
-                                    input.use(backup::restore)
                                 }
                             }
                             result.onSuccess {

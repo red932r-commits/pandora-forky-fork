@@ -17,7 +17,6 @@ class WorkspaceBackupTest {
         val root = Files.createTempDirectory("pandora-backup-test").toFile()
         try {
             val filesDir = root.resolve("files").apply { mkdirs() }
-            val cacheDir = root.resolve("cache").apply { mkdirs() }
             val workspace = filesDir.resolve("linux-workspace").toPath().createDirectories()
             val project = workspace.resolve("project").createDirectories()
             project.resolve("hello.txt").writeText("hello from Pandora")
@@ -27,7 +26,7 @@ class WorkspaceBackupTest {
             Files.createSymbolicLink(project.resolve("hello-link"), project.fileSystem.getPath("hello.txt"))
 
             val archive = ByteArrayOutputStream()
-            val backup = WorkspaceBackup(filesDir, cacheDir)
+            val backup = WorkspaceBackup(filesDir)
             backup.write(archive)
 
             filesDir.resolve("linux-workspace").deleteRecursively()
@@ -41,6 +40,66 @@ class WorkspaceBackupTest {
             assertTrue(Files.isSymbolicLink(restored.resolve("hello-link").toPath()))
             assertEquals("hello.txt", Files.readSymbolicLink(restored.resolve("hello-link").toPath()).toString())
             assertFalse(filesDir.resolve("linux-workspace/stale.txt").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptedSwapRestoresPreviousWorkspace() {
+        val root = Files.createTempDirectory("pandora-backup-recovery").toFile()
+        try {
+            val filesDir = root.resolve("files").apply { mkdirs() }
+            val previous = filesDir.resolve("linux-workspace-restore-previous").apply { mkdirs() }
+            previous.resolve("keep.txt").writeText("original")
+            filesDir.resolve("linux-workspace-restore-in-progress")
+                .writeText("had-workspace=true\nstate=previous-staged\n")
+
+            WorkspaceBackup(filesDir).recoverInterruptedRestore()
+
+            assertEquals("original", filesDir.resolve("linux-workspace/keep.txt").readText())
+            assertFalse(previous.exists())
+            assertFalse(filesDir.resolve("linux-workspace-restore-in-progress").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptedSwapKeepsActivatedWorkspace() {
+        val root = Files.createTempDirectory("pandora-backup-recovery").toFile()
+        try {
+            val filesDir = root.resolve("files").apply { mkdirs() }
+            filesDir.resolve("linux-workspace").apply { mkdirs() }.resolve("value.txt").writeText("restored")
+            filesDir.resolve("linux-workspace-restore-previous").apply { mkdirs() }
+                .resolve("value.txt").writeText("old")
+            filesDir.resolve("linux-workspace-restore-in-progress")
+                .writeText("had-workspace=true\nstate=restored-active\n")
+
+            WorkspaceBackup(filesDir).recoverInterruptedRestore()
+
+            assertEquals("restored", filesDir.resolve("linux-workspace/value.txt").readText())
+            assertFalse(filesDir.resolve("linux-workspace-restore-previous").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun invalidArchiveDoesNotReplaceCurrentWorkspace() {
+        val root = Files.createTempDirectory("pandora-backup-invalid").toFile()
+        try {
+            val filesDir = root.resolve("files").apply { mkdirs() }
+            filesDir.resolve("linux-workspace").apply { mkdirs() }
+                .resolve("keep.txt").writeText("unchanged")
+
+            val failure = runCatching {
+                WorkspaceBackup(filesDir).restore(ByteArrayInputStream(byteArrayOf()))
+            }.exceptionOrNull()
+
+            assertTrue(failure is IllegalStateException)
+            assertEquals("unchanged", filesDir.resolve("linux-workspace/keep.txt").readText())
+            assertTrue(filesDir.listFiles().orEmpty().none { it.name.startsWith(".workspace-restore-") })
         } finally {
             root.deleteRecursively()
         }

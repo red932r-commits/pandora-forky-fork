@@ -114,6 +114,10 @@ class PtyTerminalSession(
         scope.cancel()
     }
 
+    suspend fun awaitStopped() {
+        scope.coroutineContext[Job]?.join()
+    }
+
     private suspend fun readLoop(fd: Int) {
         val buffer = ByteArray(8192)
         while (_state.value == State.RUNNING) {

@@ -90,12 +90,22 @@ class CodexChatSessionManager(private val context: Context) {
 
     @Synchronized
     fun stopAll() {
+        stopAllForWorkspaceOperation()
+    }
+
+    @Synchronized
+    internal fun stopAllForWorkspaceOperation(): List<CodexChatSession> {
         val current = _sessions.value
         _sessions.value = emptyList()
         observationJobs.values.forEach { it.cancel() }
         observationJobs.clear()
         current.forEach(CodexChatSession::close)
         refreshForegroundService()
+        return current
+    }
+
+    internal fun stopOrphanedAppServers() {
+        RootfsInstaller(appContext).terminateStaleCodexAppServers()
     }
 
     private fun observe(session: CodexChatSession) {

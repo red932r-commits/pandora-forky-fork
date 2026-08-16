@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -269,6 +270,10 @@ class CodexChatSession(
         _interrupting.value = false
         _state.value = CodexChatState.Closed
         scope.cancel()
+    }
+
+    suspend fun awaitClosed() {
+        scope.coroutineContext[Job]?.join()
     }
 
     private fun start() {

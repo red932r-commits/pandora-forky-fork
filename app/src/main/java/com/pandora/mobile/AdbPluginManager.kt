@@ -69,6 +69,7 @@ class AdbPluginManager(private val context: Context) : Closeable {
 
     private var discovery: NsdManager.DiscoveryListener? = null
     private var stateJob: Job? = null
+    @Volatile private var stoppedStateJob: Job? = null
     private var connectionRequestedForControl = false
     private var bridge: AdbControlBridge? = null
     private var adbServerProcess: Process? = null
@@ -196,6 +197,10 @@ class AdbPluginManager(private val context: Context) : Closeable {
     }
 
     fun stopControl() {
+        val pending = stateJob
+        stateJob = null
+        pending?.cancel()
+        stoppedStateJob = pending
         connectionRequestedForControl = false
         controlOverlay.hide()
         controlSerialFile.delete()
@@ -209,6 +214,12 @@ class AdbPluginManager(private val context: Context) : Closeable {
                 }
             }
         }
+    }
+
+    internal suspend fun awaitWorkspaceIdle() {
+        val pending = stoppedStateJob
+        pending?.join()
+        if (stoppedStateJob === pending) stoppedStateJob = null
     }
 
     internal fun sendAgentNotification(title: String, message: String): AgentNotificationResult =

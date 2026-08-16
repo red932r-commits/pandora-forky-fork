@@ -3,20 +3,25 @@ package com.pandora.mobile.linux
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
-class WorkspaceBackup(private val filesDir: File, private val cacheDir: File) {
+class WorkspaceBackup(private val filesDir: File) {
     data class Result(val files: Int, val bytes: Long)
 
     private val workspace = File(filesDir, "linux-workspace")
+    private val previousWorkspace = File(filesDir, PREVIOUS_WORKSPACE)
+    private val restoreMarker = File(filesDir, RESTORE_MARKER)
 
     fun write(output: OutputStream): Result {
         check(workspace.isDirectory) { "The Linux workspace has not been created yet" }
@@ -59,8 +64,10 @@ class WorkspaceBackup(private val filesDir: File, private val cacheDir: File) {
         return Result(fileCount, byteCount)
     }
 
+    @Synchronized
     fun restore(input: InputStream): Result {
-        val staging = File(cacheDir, "workspace-restore-${UUID.randomUUID()}")
+        recoverInterruptedRestore()
+        val staging = File(filesDir, "$RESTORE_STAGING_PREFIX${UUID.randomUUID()}")
         val restoredWorkspace = File(staging, "workspace")
         var manifest: String? = null
         var symlinkData = ""
@@ -120,6 +127,36 @@ class WorkspaceBackup(private val filesDir: File, private val cacheDir: File) {
         }
     }
 
+    /**
+     * Resolves an interrupted directory swap before anything opens the workspace.
+     * If the new workspace was activated, it wins; otherwise the previous one is
+     * put back. Both outcomes leave a complete directory at the canonical path.
+     */
+    @Synchronized
+    fun recoverInterruptedRestore() {
+        if (restoreMarker.exists() || previousWorkspace.exists()) {
+            val hadWorkspace = restoreMarker.takeIf(File::isFile)
+                ?.readText()
+                ?.lineSequence()
+                ?.firstOrNull()
+                ?.substringAfter("had-workspace=", "")
+                ?.toBooleanStrictOrNull()
+                ?: previousWorkspace.exists()
+            when {
+                workspace.exists() -> previousWorkspace.deleteRecursively()
+                previousWorkspace.exists() -> moveDirectory(previousWorkspace, workspace)
+                hadWorkspace -> error("An interrupted restore left no recoverable Linux workspace")
+            }
+            check(restoreMarker.delete() || !restoreMarker.exists()) {
+                "Could not finish restore recovery"
+            }
+        }
+        filesDir.listFiles()
+            .orEmpty()
+            .filter { it.name.startsWith(RESTORE_STAGING_PREFIX) }
+            .forEach(File::deleteRecursively)
+    }
+
     private fun restoreSymlinks(root: File, data: String) {
         data.lineSequence().filter { it.isNotBlank() }.forEach { line ->
             val parts = line.split('\t', limit = 2)
@@ -132,16 +169,38 @@ class WorkspaceBackup(private val filesDir: File, private val cacheDir: File) {
     }
 
     private fun replaceWorkspace(restored: File) {
-        val previous = File(filesDir, "linux-workspace-restore-previous")
-        if (previous.exists()) previous.deleteRecursively()
+        check(!previousWorkspace.exists()) { "A previous restore has not been recovered" }
         val hadWorkspace = workspace.exists()
-        if (hadWorkspace) check(workspace.renameTo(previous)) { "Could not stage the current workspace" }
+        writeRestoreMarker("prepared", hadWorkspace)
         try {
-            check(restored.renameTo(workspace)) { "Could not activate the restored workspace" }
-            previous.deleteRecursively()
+            if (hadWorkspace) moveDirectory(workspace, previousWorkspace)
+            writeRestoreMarker("previous-staged", hadWorkspace)
+            moveDirectory(restored, workspace)
+            writeRestoreMarker("restored-active", hadWorkspace)
+            previousWorkspace.deleteRecursively()
+            check(restoreMarker.delete() || !restoreMarker.exists()) { "Could not finalize the restored workspace" }
         } catch (error: Throwable) {
-            if (!workspace.exists() && hadWorkspace) previous.renameTo(workspace)
+            if (!workspace.exists() && hadWorkspace && previousWorkspace.exists()) {
+                runCatching { moveDirectory(previousWorkspace, workspace) }
+            }
             throw error
+        }
+    }
+
+    private fun writeRestoreMarker(state: String, hadWorkspace: Boolean) {
+        FileOutputStream(restoreMarker).use { output ->
+            output.write("had-workspace=$hadWorkspace\nstate=$state\n".toByteArray(StandardCharsets.UTF_8))
+            output.fd.sync()
+        }
+    }
+
+    private fun moveDirectory(source: File, target: File) {
+        check(source.exists()) { "Workspace directory is missing: ${source.name}" }
+        check(!target.exists()) { "Workspace directory already exists: ${target.name}" }
+        try {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(source.toPath(), target.toPath())
         }
     }
 
@@ -184,5 +243,8 @@ class WorkspaceBackup(private val filesDir: File, private val cacheDir: File) {
         private const val MAX_ENTRIES = 200_000
         private const val MAX_METADATA_BYTES = 8 * 1024 * 1024
         private const val MAX_UNCOMPRESSED_BYTES = 8L * 1024 * 1024 * 1024
+        private const val PREVIOUS_WORKSPACE = "linux-workspace-restore-previous"
+        private const val RESTORE_MARKER = "linux-workspace-restore-in-progress"
+        private const val RESTORE_STAGING_PREFIX = ".workspace-restore-"
     }
 }

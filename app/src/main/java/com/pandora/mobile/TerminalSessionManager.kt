@@ -6,10 +6,12 @@ import android.net.Uri
 import com.openminis.app.ui.terminal.emulator.TerminalEmulator
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.RootfsInstaller
+import com.pandora.mobile.linux.ZmxSessionCatalog
 import java.util.UUID
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -70,10 +72,10 @@ class ManagedTerminalSession internal constructor(
         onStateChanged()
     }
 
-    fun stop(killPersistent: Boolean = true) {
+    fun stop(killPersistent: Boolean = true): Thread? {
         pty.stop()
         scope.cancel()
-        if (killPersistent) {
+        return if (killPersistent) {
             thread(name = "zmx-kill-$persistentSessionName", isDaemon = true) {
                 runCatching {
                     val installer = RootfsInstaller(appContext)
@@ -90,7 +92,14 @@ class ManagedTerminalSession internal constructor(
                     process.waitFor()
                 }
             }
+        } else {
+            null
         }
+    }
+
+    internal suspend fun awaitStopped() {
+        pty.awaitStopped()
+        scope.coroutineContext[Job]?.join()
     }
 
     private fun inspectLoginOutput(bytes: ByteArray) {
@@ -208,10 +217,19 @@ class TerminalSessionManager(private val context: Context) {
     }
 
     fun stopAll() {
+        stopAllForWorkspaceOperation()
+    }
+
+    internal fun stopAllForWorkspaceOperation(): TerminalStopHandle {
         val current = _sessions.value
         _sessions.value = emptyList()
-        current.forEach { it.stop() }
+        val cleanup = current.mapNotNull { it.stop() }
         refreshForegroundService()
+        return TerminalStopHandle(current, cleanup)
+    }
+
+    internal fun stopRemainingPersistentSessions() {
+        ZmxSessionCatalog(context).stopAll()
     }
 
     private fun refreshForegroundService() {
@@ -223,3 +241,8 @@ class TerminalSessionManager(private val context: Context) {
         LinuxSessionService.setTerminalActive(context, running)
     }
 }
+
+internal data class TerminalStopHandle(
+    val sessions: List<ManagedTerminalSession>,
+    val persistentCleanup: List<Thread>,
+)
