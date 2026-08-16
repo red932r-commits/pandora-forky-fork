@@ -150,6 +150,7 @@ fun SkillsScreen(
                 Spacer(Modifier.height(14.dp))
                 PrimaryPluginButton(
                     label = when (state.stage) {
+                        AdbPluginStage.PAIRED,
                         AdbPluginStage.CONNECTED -> "Review connection"
                         AdbPluginStage.ERROR -> "Try setup again"
                         else -> "Set up connection"
@@ -284,7 +285,7 @@ fun AdbSetupScreen(
             !overlayPermissionGranted -> OverlayPermissionContent {
                 openOverlayPermission(context)
             }
-            state.stage == AdbPluginStage.CONNECTED -> ConnectedContent()
+            state.stage in setOf(AdbPluginStage.PAIRED, AdbPluginStage.CONNECTED) -> ConnectedContent()
             state.stage == AdbPluginStage.ERROR -> ErrorContent(state.detail, onRetry = launchSetup)
             else -> PairingContent(state = state, onLaunchSetup = launchSetup)
         }
@@ -460,7 +461,7 @@ private fun SetupProgress(stage: AdbPluginStage, developerOptionsEnabled: Boolea
     val current = when {
         !developerOptionsEnabled -> 0
         !overlayPermissionGranted -> 1
-        stage == AdbPluginStage.CONNECTED -> 4
+        stage in setOf(AdbPluginStage.PAIRED, AdbPluginStage.CONNECTED) -> 4
         stage in setOf(AdbPluginStage.PAIRING, AdbPluginStage.CONNECTING, AdbPluginStage.WAITING_FOR_CODE) -> 3
         else -> 2
     }
@@ -515,15 +516,16 @@ private fun SetupInstruction(number: String, title: String, detail: String) {
 
 @Composable
 private fun StatusRow(state: AdbPluginState) {
-    val connected = state.stage == AdbPluginStage.CONNECTED
+    val ready = state.stage in setOf(AdbPluginStage.PAIRED, AdbPluginStage.CONNECTED)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(8.dp).background(if (connected) Color(0xFF4E9A67) else MaterialThemeColors.muted, CircleShape),
+            Modifier.size(8.dp).background(if (ready) Color(0xFF4E9A67) else MaterialThemeColors.muted, CircleShape),
         )
         Spacer(Modifier.width(8.dp))
         Text(
             when {
-                connected -> "Connected"
+                state.controlActive -> "Control active"
+                ready -> "Ready"
                 state.stage == AdbPluginStage.ERROR -> "Setup needs attention"
                 else -> "Not connected"
             },

@@ -1,6 +1,6 @@
 # Pandora agent bridge
 
-Pandora exposes a small HTTP API to agents inside its Debian environment. It listens only on `127.0.0.1:8765`; it is not available through Wi-Fi or another device.
+Pandora exposes a small HTTP API to agents inside its Debian environment. It listens only on `127.0.0.1:8765`; it is not available through Wi-Fi or another device. Every request must include `X-Pandora-Token` with the value stored in `/root/.pandora/bridge-token`.
 
 Responses use JSON. A successful command returns HTTP 200 with `"ok": true`, except status, which returns the state directly. Callers should use `curl -f` so permission and validation errors fail the command.
 
@@ -9,13 +9,17 @@ Responses use JSON. A successful command returns HTTP 200 with `"ok": true`, exc
 Start the visible safety frame before issuing any ADB command:
 
 ```sh
-curl -fsS -X POST http://127.0.0.1:8765/v1/control/start
+curl -fsS -X POST \
+  -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
+  http://127.0.0.1:8765/v1/control/start
 ```
 
 Poll until `active` is `true`:
 
 ```sh
-curl -fsS http://127.0.0.1:8765/v1/status
+curl -fsS \
+  -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
+  http://127.0.0.1:8765/v1/status
 ```
 
 Example response:
@@ -27,7 +31,9 @@ Example response:
 Stop immediately after the requested phone interaction, including after an error:
 
 ```sh
-curl -fsS -X POST http://127.0.0.1:8765/v1/control/stop
+curl -fsS -X POST \
+  -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
+  http://127.0.0.1:8765/v1/control/stop
 ```
 
 The on-screen Stop control invokes the same stop operation. Stopping removes the overlay and disconnects the ADB transport.
@@ -38,6 +44,7 @@ Send a notification when requested work is complete, when a result is ready, or 
 
 ```sh
 curl -fsS -X POST \
+  -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
   --data-urlencode 'title=Pandora' \
   --data-urlencode 'message=Your report is ready to review.' \
   http://127.0.0.1:8765/v1/notify

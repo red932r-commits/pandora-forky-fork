@@ -12,29 +12,33 @@ Use Pandora's visible control session for every phone interaction. Keep actions 
 1. Start a session before running any ADB device command:
 
    ```sh
-   curl -fsS -X POST http://127.0.0.1:8765/v1/control/start
+   curl -fsS -X POST \
+     -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
+     http://127.0.0.1:8765/v1/control/start
    ```
 
-2. Poll `http://127.0.0.1:8765/v1/status` briefly. Continue only when it reports `"active":true`. If it does not become active, report that phone control is unavailable; do not bypass Pandora or repeatedly reconnect.
+2. Poll `http://127.0.0.1:8765/v1/status` briefly with the same `X-Pandora-Token` header. Continue only when it reports `"active":true`. If it does not become active, report that phone control is unavailable; do not bypass Pandora or repeatedly reconnect.
 
-3. Run `adb devices` and require `127.0.0.1:5555` to be in the `device` state. Use that exact serial for every device command. Ignore any automatic `emulator-5554` entry; do not connect or select another transport yourself.
+3. Read the exact active serial from `/root/.pandora/adb-control-serial`. Run `adb devices` and require that serial to be in the `device` state. Use `adb -s "$(cat /root/.pandora/adb-control-serial)"` for every device command; do not connect or select another transport yourself.
 
 4. Inspect before acting. Prefer the UI hierarchy for coordinates:
 
    ```sh
-   adb -s 127.0.0.1:5555 exec-out uiautomator dump /dev/tty
+   adb -s "$(cat /root/.pandora/adb-control-serial)" exec-out uiautomator dump /dev/tty
    ```
 
    Use `adb shell input tap`, `swipe`, `text`, or `keyevent` only as needed for the requested task. Capture screenshots with:
 
    ```sh
-   adb -s 127.0.0.1:5555 exec-out screencap -p > /root/device-screen.png
+   adb -s "$(cat /root/.pandora/adb-control-serial)" exec-out screencap -p > /root/device-screen.png
    ```
 
 5. Stop immediately when the task finishes or cannot continue:
 
    ```sh
-   curl -fsS -X POST http://127.0.0.1:8765/v1/control/stop
+   curl -fsS -X POST \
+     -H "X-Pandora-Token: $(cat /root/.pandora/bridge-token)" \
+     http://127.0.0.1:8765/v1/control/stop
    ```
 
 Always run the stop request after an error as well as after success.

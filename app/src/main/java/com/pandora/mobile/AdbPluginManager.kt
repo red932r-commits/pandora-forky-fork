@@ -5,11 +5,13 @@ import android.content.Intent
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.pandora.mobile.linux.RootfsInstaller
 import java.io.Closeable
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -17,6 +19,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -26,12 +30,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class AdbPluginStage {
     DISABLED,
     READY,
+    PAIRED,
     PREPARING,
     WAITING_FOR_PAIRING,
     WAITING_FOR_CODE,
@@ -68,15 +72,21 @@ class AdbPluginManager(private val context: Context) : Closeable {
     private var connectionRequestedForControl = false
     private var bridge: AdbControlBridge? = null
     private var adbServerProcess: Process? = null
+    private val adbIdentityDirectory = File(context.filesDir, "adb-identity")
+    private val legacyAdbIdentityDirectory = File(installer.workspace, ".android")
+    private val bridgeTokenFile = File(installer.workspace, ".pandora/bridge-token")
+    private val controlSerialFile = File(installer.workspace, ".pandora/adb-control-serial")
     private val controlOverlay = SystemAdbControlOverlay(context, ::stopControl)
     private val agentNotifications = AgentNotificationController(context)
     private val started = AtomicBoolean(false)
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
+        ensureBridgeToken()
+        migrateLegacyAdbIdentity()
         bridge = AdbControlBridge(this).also(AdbControlBridge::start)
-        if (_state.value.enabled) {
-            if (hasPairingKey()) stateJob = scope.launch { refreshConnection() }
+        if (_state.value.enabled && hasPairingKey()) {
+            _state.value = _state.value.copy(stage = AdbPluginStage.PAIRED, detail = "Phone pairing is ready.")
         }
     }
 
@@ -90,16 +100,15 @@ class AdbPluginManager(private val context: Context) : Closeable {
             _state.value = AdbPluginState()
             context.stopService(Intent(context, AdbPairingService::class.java))
             scope.launch {
-                runAdb(listOf("disconnect"))
-                stopAdbServer()
+                deactivateAdbTransport()
             }
             return
         }
         _state.value = AdbPluginState(enabled = true, stage = AdbPluginStage.READY)
         if (!started.get()) start()
+        migrateLegacyAdbIdentity()
         if (hasPairingKey()) {
-            stateJob?.cancel()
-            stateJob = scope.launch { refreshConnection() }
+            _state.value = _state.value.copy(stage = AdbPluginStage.PAIRED, detail = "Phone pairing is ready.")
         }
     }
 
@@ -166,32 +175,37 @@ class AdbPluginManager(private val context: Context) : Closeable {
             fail("Allow Pandora to display the control frame over other apps before starting phone control.")
             return
         }
-        scope.launch {
-            if (!isConnected() && !connectLoopback()) {
-                connectionRequestedForControl = true
-                _state.value = _state.value.copy(stage = AdbPluginStage.CONNECTING, detail = "Connecting to this phone…")
+        if (_state.value.controlActive) return
+        connectionRequestedForControl = true
+        controlOverlay.show()
+        _state.value = _state.value.copy(
+            stage = AdbPluginStage.CONNECTING,
+            detail = "Connecting to this phone…",
+            controlActive = false,
+        )
+        stateJob?.cancel()
+        stateJob = scope.launch {
+            if (!prepareAdb() || !ensureAdbIdentity()) return@launch
+            val connected = connectedSerials().firstOrNull()
+            if (connected != null) {
+                if (installControlSkill()) activateControl(connected)
+            } else {
                 connectDiscoveredDevice()
-                return@launch
             }
-            _state.value = _state.value.copy(
-                stage = AdbPluginStage.CONNECTED,
-                detail = "ADB phone control is active.",
-                controlActive = true,
-            )
-            controlOverlay.show()
         }
     }
 
     fun stopControl() {
         connectionRequestedForControl = false
         controlOverlay.hide()
+        controlSerialFile.delete()
         val wasEnabled = _state.value.enabled
         _state.value = _state.value.copy(controlActive = false, detail = "Control stopped.")
         if (wasEnabled) {
             scope.launch {
-                runAdb(listOf("disconnect"))
+                deactivateAdbTransport()
                 if (_state.value.enabled) {
-                    _state.value = _state.value.copy(stage = AdbPluginStage.READY, detail = "Control stopped.")
+                    _state.value = _state.value.copy(stage = AdbPluginStage.PAIRED, detail = "Control stopped.")
                 }
             }
         }
@@ -207,12 +221,10 @@ class AdbPluginManager(private val context: Context) : Closeable {
             return
         }
         stateJob?.cancel()
+        _state.value = _state.value.copy(stage = AdbPluginStage.CONNECTING, detail = "Checking phone pairing…")
         stateJob = scope.launch {
-            _state.value = _state.value.copy(
-                stage = AdbPluginStage.CONNECTING,
-                detail = "Looking for this phone again…",
-            )
-            refreshConnection()
+            if (!prepareAdb() || !ensureAdbIdentity()) return@launch
+            connectDiscoveredDevice()
         }
     }
 
@@ -224,28 +236,17 @@ class AdbPluginManager(private val context: Context) : Closeable {
         check(java.io.File(installer.rootfs, "usr/bin/adb").isFile) {
             "ADB support could not be installed. Check the network and try again."
         }
+        migrateLegacyAdbIdentity()
         true
     }.getOrElse {
         fail(it.message ?: "Could not prepare ADB support.")
         false
     }
 
-    private suspend fun refreshConnection() {
-        if (!prepareAdb()) return
-        if (isConnected() || connectLoopback()) {
-            if (installControlSkill()) {
-                _state.value = _state.value.copy(stage = AdbPluginStage.CONNECTED, detail = "Phone connected.")
-            }
-        } else {
-            _state.value = _state.value.copy(stage = AdbPluginStage.CONNECTING, detail = "Reconnecting to this phone…")
-            connectDiscoveredDevice()
-        }
-    }
-
     /** Gives Android's paired-device list a stable, human-readable Pandora label. */
     private suspend fun ensureAdbIdentity(): Boolean = runCatching {
-        val key = java.io.File(installer.workspace, ".android/adbkey")
-        val publicKey = java.io.File(installer.workspace, ".android/adbkey.pub")
+        val key = File(adbIdentityDirectory, "adbkey")
+        val publicKey = File(adbIdentityDirectory, "adbkey.pub")
         if (!key.isFile || !publicKey.isFile) {
             key.parentFile?.mkdirs()
             val result = runAdb(listOf("keygen", "/root/.android/adbkey"))
@@ -263,11 +264,7 @@ class AdbPluginManager(private val context: Context) : Closeable {
         false
     }
 
-    private fun hasPairingKey(): Boolean = java.io.File(installer.workspace, ".android/adbkey").isFile
-
-    private suspend fun isConnected(): Boolean {
-        return connectedSerials().isNotEmpty()
-    }
+    private fun hasPairingKey(): Boolean = File(adbIdentityDirectory, "adbkey").isFile
 
     private suspend fun connectedSerials(): List<String> {
         val result = runAdb(listOf("devices"))
@@ -280,40 +277,6 @@ class AdbPluginManager(private val context: Context) : Closeable {
             .toList()
     }
 
-    private suspend fun connectLoopback(): Boolean {
-        if (LOOPBACK_ENDPOINT in connectedSerials()) return true
-        val result = runAdb(listOf("connect", LOOPBACK_ENDPOINT))
-        if (result.exitCode != 0 || !result.output.contains("connected", ignoreCase = true)) return false
-        return LOOPBACK_ENDPOINT in connectedSerials()
-    }
-
-    /**
-     * Wireless debugging is only the authorization bootstrap. Once authorized,
-     * restart adbd on a fixed port and reconnect through the phone's loopback
-     * interface, which is shared with Pandora's PRoot container.
-     */
-    private suspend fun moveToLoopback(sourceSerial: String): Boolean {
-        if (connectLoopback()) return true
-        _state.value = _state.value.copy(
-            stage = AdbPluginStage.CONNECTING,
-            detail = "Finishing the on-device connection…",
-        )
-        val tcpip = runAdb(listOf("-s", sourceSerial, "tcpip", LOOPBACK_PORT.toString()))
-        if (tcpip.exitCode != 0 && !tcpip.output.contains("restarting", ignoreCase = true)) {
-            Log.w(TAG, "Could not switch adbd to loopback: ${tcpip.output}")
-            return false
-        }
-
-        repeat(LOOPBACK_CONNECT_POLLS) {
-            delay(LOOPBACK_CONNECT_POLL_MS)
-            if (connectLoopback()) {
-                if (sourceSerial != LOOPBACK_ENDPOINT) runAdb(listOf("disconnect", sourceSerial))
-                return true
-            }
-        }
-        return false
-    }
-
     private fun connectDiscoveredDevice() {
         discoverOnce(CONNECT_SERVICE) { endpoint ->
             scope.launch {
@@ -323,28 +286,27 @@ class AdbPluginManager(private val context: Context) : Closeable {
                 // is healthy, so prefer the actual device list over that stale error.
                 val connected =
                     (result.exitCode == 0 && result.output.contains("connected", ignoreCase = true)) ||
-                        isConnected()
+                        connectedSerials().isNotEmpty()
                 if (connected) {
                     val sourceSerial = connectedSerials().firstOrNull { it == endpoint.address }
-                        ?: connectedSerials().firstOrNull { it != LOOPBACK_ENDPOINT }
-                        ?: LOOPBACK_ENDPOINT
-                    if (!moveToLoopback(sourceSerial)) {
-                        fail("Phone paired, but Pandora could not finish its on-device ADB connection.")
-                        AdbPairingService.refresh(context)
-                        return@launch
-                    }
+                        ?: connectedSerials().firstOrNull()
+                        ?: return@launch fail("Phone paired, but Pandora could not identify the ADB connection.")
                     if (!installControlSkill()) {
                         AdbPairingService.refresh(context)
                         return@launch
                     }
                     val activate = connectionRequestedForControl
                     connectionRequestedForControl = false
-                    _state.value = _state.value.copy(
-                        stage = AdbPluginStage.CONNECTED,
-                        detail = if (activate) "ADB phone control is active." else "Phone connected.",
-                        controlActive = activate,
-                    )
-                    if (activate) controlOverlay.show()
+                    if (activate) {
+                        activateControl(sourceSerial)
+                    } else {
+                        deactivateAdbTransport()
+                        _state.value = _state.value.copy(
+                            stage = AdbPluginStage.PAIRED,
+                            detail = "Phone pairing is ready.",
+                            controlActive = false,
+                        )
+                    }
                     AdbPairingService.complete(context)
                 } else {
                     fail(result.output.ifBlank { "Paired, but could not connect to Android debugging." })
@@ -405,14 +367,22 @@ class AdbPluginManager(private val context: Context) : Closeable {
 
     private fun fail(message: String) {
         controlOverlay.hide()
+        controlSerialFile.delete()
+        connectionRequestedForControl = false
         _state.value = _state.value.copy(stage = AdbPluginStage.ERROR, detail = message, controlActive = false)
+        scope.launch { deactivateAdbTransport() }
     }
 
     private suspend fun runAdb(arguments: List<String>, stdin: String? = null): CommandResult {
         if (arguments.firstOrNull() != "keygen" && !ensureAdbServer()) {
             return CommandResult(-1, "Pandora could not start its ADB service.")
         }
-        val command = installer.containerCommand("/usr/bin/adb", *arguments.toTypedArray())
+        adbIdentityDirectory.mkdirs()
+        val command = installer.containerCommandWithBindings(
+            listOf(adbIdentityDirectory to "/root/.android"),
+            "/usr/bin/adb",
+            *arguments.toTypedArray(),
+        )
         return runCatching {
             val process = installer.startContainerProcess(command, mergeError = true)
             if (stdin != null) {
@@ -439,7 +409,13 @@ class AdbPluginManager(private val context: Context) : Closeable {
     private fun ensureAdbServer(): Boolean {
         if (adbServerReachable()) return true
         adbServerProcess?.takeIf(Process::isAlive)?.let(installer::terminateProcessTree)
-        val command = installer.containerCommand("/usr/bin/adb", "server", "nodaemon")
+        adbIdentityDirectory.mkdirs()
+        val command = installer.containerCommandWithBindings(
+            listOf(adbIdentityDirectory to "/root/.android"),
+            "/usr/bin/adb",
+            "server",
+            "nodaemon",
+        )
         val process = runCatching { installer.startContainerProcess(command, mergeError = true) }
             .getOrElse {
                 Log.w(TAG, "Could not launch ADB server", it)
@@ -481,11 +457,52 @@ class AdbPluginManager(private val context: Context) : Closeable {
         bridge?.close()
         bridge = null
         controlOverlay.close()
+        controlSerialFile.delete()
         stopAdbServer()
         scope.coroutineContext[Job]?.cancel()
     }
 
     private data class CommandResult(val exitCode: Int, val output: String)
+
+    internal fun bridgeToken(): String = ensureBridgeToken()
+
+    private fun activateControl(serial: String) {
+        controlSerialFile.parentFile?.mkdirs()
+        controlSerialFile.writeText(serial + "\n")
+        _state.value = _state.value.copy(
+            stage = AdbPluginStage.CONNECTED,
+            detail = "ADB phone control is active.",
+            controlActive = true,
+        )
+    }
+
+    private suspend fun deactivateAdbTransport() {
+        runCatching { runAdb(listOf("disconnect")) }
+        stopAdbServer()
+    }
+
+    @Synchronized
+    private fun migrateLegacyAdbIdentity() {
+        if (!legacyAdbIdentityDirectory.isDirectory) return
+        adbIdentityDirectory.mkdirs()
+        listOf("adbkey", "adbkey.pub").forEach { name ->
+            val legacy = File(legacyAdbIdentityDirectory, name)
+            val target = File(adbIdentityDirectory, name)
+            if (legacy.isFile && !target.isFile) legacy.copyTo(target)
+            if (target.isFile) legacy.delete()
+        }
+        legacyAdbIdentityDirectory.delete()
+    }
+
+    @Synchronized
+    private fun ensureBridgeToken(): String {
+        bridgeTokenFile.takeIf(File::isFile)?.readText()?.trim()?.takeIf { it.length >= 32 }?.let { return it }
+        val bytes = ByteArray(32).also(SecureRandom()::nextBytes)
+        val token = Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
+        bridgeTokenFile.parentFile?.mkdirs()
+        bridgeTokenFile.writeText(token + "\n")
+        return token
+    }
 
     private data class AdbEndpoint(val host: String, val port: Int) {
         val address: String = if (':' in host) "[$host]:$port" else "$host:$port"
@@ -496,10 +513,6 @@ class AdbPluginManager(private val context: Context) : Closeable {
         const val PAIRING_SERVICE = "_adb-tls-pairing._tcp."
         const val CONNECT_SERVICE = "_adb-tls-connect._tcp."
         const val ADB_IDENTITY = "Pandora@device"
-        const val LOOPBACK_PORT = 5555
-        const val LOOPBACK_ENDPOINT = "127.0.0.1:$LOOPBACK_PORT"
-        const val LOOPBACK_CONNECT_POLL_MS = 350L
-        const val LOOPBACK_CONNECT_POLLS = 12
         const val ADB_COMMAND_TIMEOUT_SECONDS = 20L
         const val ADB_SERVER_PORT = 5037
         const val ADB_SERVER_CONNECT_TIMEOUT_MS = 100
@@ -531,6 +544,13 @@ private class AdbControlBridge(private val manager: AdbPluginManager) : Closeabl
             socket,
             BridgeResponse("400 Bad Request", "{\"ok\":false,\"error\":\"bad_request\"}"),
         )
+        val providedToken = request.headers[BRIDGE_TOKEN_HEADER]
+        if (!secureEquals(manager.bridgeToken(), providedToken)) {
+            return@use writeResponse(
+                socket,
+                BridgeResponse("403 Forbidden", "{\"ok\":false,\"error\":\"unauthorized\"}"),
+            )
+        }
         val response = when (request.method to request.path) {
             "POST" to "/v1/control/start" -> {
                 manager.startControl()
@@ -572,9 +592,12 @@ private class AdbControlBridge(private val manager: AdbPluginManager) : Closeabl
         val method = firstLine[0].uppercase()
         val target = firstLine[1]
         var contentLength = 0
+        val headers = mutableMapOf<String, String>()
         while (true) {
             val line = reader.readLine() ?: return null
             if (line.isEmpty()) break
+            val separator = line.indexOf(':')
+            if (separator > 0) headers[line.substring(0, separator).trim().lowercase()] = line.substring(separator + 1).trim()
             if (line.startsWith("Content-Length:", ignoreCase = true)) {
                 contentLength = line.substringAfter(':').trim().toIntOrNull() ?: return null
             }
@@ -588,7 +611,7 @@ private class AdbControlBridge(private val manager: AdbPluginManager) : Closeabl
             read += count
         }
         val parameters = parseForm(target.substringAfter('?', "")) + parseForm(String(body))
-        return BridgeRequest(method, target.substringBefore('?'), parameters)
+        return BridgeRequest(method, target.substringBefore('?'), parameters, headers)
     }
 
     private fun parseForm(encoded: String): Map<String, String> = encoded
@@ -620,13 +643,23 @@ private class AdbControlBridge(private val manager: AdbPluginManager) : Closeabl
         const val TAG = "AdbControlBridge"
         const val BRIDGE_PORT = 8765
         const val MAX_REQUEST_BODY_LENGTH = 8_192
+        const val BRIDGE_TOKEN_HEADER = "x-pandora-token"
     }
 
     private data class BridgeRequest(
         val method: String,
         val path: String,
         val parameters: Map<String, String>,
+        val headers: Map<String, String>,
     )
 
     private data class BridgeResponse(val status: String, val body: String)
+}
+
+internal fun secureEquals(expected: String, actual: String?): Boolean {
+    if (actual == null) return false
+    return MessageDigest.isEqual(
+        expected.toByteArray(StandardCharsets.UTF_8),
+        actual.toByteArray(StandardCharsets.UTF_8),
+    )
 }

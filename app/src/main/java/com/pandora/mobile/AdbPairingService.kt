@@ -46,7 +46,7 @@ class AdbPairingService : Service() {
             .setStyle(NotificationCompat.BigTextStyle().bigText(state.detail ?: "Open Android Wireless debugging to continue."))
             .setContentIntent(openPandora)
             .setOnlyAlertOnce(state.stage != AdbPluginStage.WAITING_FOR_CODE)
-            .setOngoing(state.stage !in setOf(AdbPluginStage.CONNECTED, AdbPluginStage.ERROR))
+            .setOngoing(state.stage !in setOf(AdbPluginStage.PAIRED, AdbPluginStage.CONNECTED, AdbPluginStage.ERROR))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
 
         if (state.stage == AdbPluginStage.WAITING_FOR_CODE) {
@@ -107,6 +107,7 @@ class AdbPairingService : Service() {
             AdbPluginStage.WAITING_FOR_CODE -> "Enter the pairing code"
             AdbPluginStage.PAIRING -> "Pairing with this phone"
             AdbPluginStage.CONNECTING -> "Connecting to this phone"
+            AdbPluginStage.PAIRED -> "ADB phone control is ready"
             AdbPluginStage.CONNECTED -> "ADB phone control is ready"
             AdbPluginStage.ERROR -> "ADB pairing needs attention"
             else -> "Set up ADB phone control"

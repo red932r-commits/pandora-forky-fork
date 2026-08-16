@@ -361,8 +361,19 @@ class RootfsInstaller(private val context: Context) {
     internal fun containerCommand(vararg executableAndArgs: String): List<String> =
         containerCommandAt("/root", *executableAndArgs)
 
+    internal fun containerCommandWithBindings(
+        bindings: List<Pair<File, String>>,
+        vararg executableAndArgs: String,
+    ): List<String> = containerCommandAtWithBindings("/root", bindings, *executableAndArgs)
+
     internal fun containerCommandAt(
         workingDirectory: String,
+        vararg executableAndArgs: String,
+    ): List<String> = containerCommandAtWithBindings(workingDirectory, emptyList(), *executableAndArgs)
+
+    private fun containerCommandAtWithBindings(
+        workingDirectory: String,
+        bindings: List<Pair<File, String>>,
         vararg executableAndArgs: String,
     ): List<String> = listOf(
         proot.absolutePath,
@@ -373,6 +384,11 @@ class RootfsInstaller(private val context: Context) {
         "-b", "/proc",
         "-b", "/sys",
         "-b", "${workspace.absolutePath}:/root",
+        *bindings.flatMap { (host, guest) ->
+            require(host.isDirectory) { "Container binding does not exist: ${host.absolutePath}" }
+            require(guest.startsWith('/') && ".." !in guest.split('/')) { "Invalid container binding: $guest" }
+            listOf("-b", "${host.absolutePath}:$guest")
+        }.toTypedArray(),
         "-w", validatedContainerWorkingDirectory(workingDirectory),
         *executableAndArgs,
     )
