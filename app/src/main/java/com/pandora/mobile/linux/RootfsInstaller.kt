@@ -194,19 +194,23 @@ class RootfsInstaller(private val context: Context) {
         }
     }
 
-    /** Installs global device-specific Codex context without replacing user edits. */
+    /** Installs global context and refreshes only Pandora-owned integration sections. */
     private fun ensureAgentKnowledge() {
         val instructions = File(workspace, ".codex/AGENTS.md")
-        if (instructions.exists()) return
-
+        val bundled = context.assets.open("pandora/AGENTS.md").bufferedReader().use { it.readText() }
         instructions.parentFile?.mkdirs()
-        context.assets.open("pandora/AGENTS.md").use { input ->
-            instructions.outputStream().use(input::copyTo)
-        }
+        val current = instructions.takeIf(File::isFile)?.readText()
+        val updated = if (current == null) bundled else refreshMarkdownSections(
+            content = current,
+            source = bundled,
+            headings = PANDORA_AGENT_INTEGRATION_HEADINGS,
+        )
+        if (current != updated) instructions.writeText(updated)
     }
 
-    /** Installs app-managed device skills after the phone has a verified ADB connection. */
+    /** Refreshes app-managed device instructions before agents use the authenticated bridge. */
     internal fun installAdbControlSkill() {
+        ensureAgentKnowledge()
         listOf("android-phone-control", "agent-notifications").forEach { skillName ->
             val skillRoot = File(workspace, ".codex/skills/$skillName")
             listOf(
@@ -600,6 +604,10 @@ class RootfsInstaller(private val context: Context) {
         const val PROCESS_IDENTITY_ENV = "PANDORA_PROCESS_ID"
         const val PANDORA_PROVIDER_ID = "pandora_byom"
         const val PANDORA_API_KEY_ENV = "PANDORA_MODEL_API_KEY"
+        val PANDORA_AGENT_INTEGRATION_HEADINGS = listOf(
+            "## ADB phone control plugin",
+            "## Agent notifications",
+        )
         const val PANDORA_PROVIDER_TABLE = "[model_providers.$PANDORA_PROVIDER_ID]"
         val INSTALL_LOCK = Any()
         val PROCESS_IDENTITIES = WeakHashMap<Process, String>()
@@ -618,6 +626,50 @@ class RootfsInstaller(private val context: Context) {
         const val ZMX_URL = "https://zmx.sh/a/zmx-0.7.0-linux-aarch64.tar.gz"
         const val ZMX_SHA256 = "77599f66124694fae80bbb1d2fa0eafdb8c648b427a048cad90513ecf6136fc9"
     }
+}
+
+internal fun refreshMarkdownSections(
+    content: String,
+    source: String,
+    headings: List<String>,
+): String {
+    var updated = content
+    headings.forEach { heading ->
+        val replacement = markdownSection(source, heading) ?: return@forEach
+        val lines = updated.trimEnd().lines().toMutableList()
+        val range = markdownSectionRange(lines, heading)
+        if (range == null) {
+            updated = updated.trimEnd() + (if (updated.isBlank()) "" else "\n\n") + replacement + "\n"
+        } else {
+            lines.subList(range.first, range.last + 1).clear()
+            lines.addAll(range.first, replacement.lines())
+            updated = lines.joinToString("\n").trimEnd() + "\n"
+        }
+    }
+    return updated.trimEnd() + "\n"
+}
+
+private fun markdownSection(content: String, heading: String): String? {
+    val lines = content.trimEnd().lines()
+    val range = markdownSectionRange(lines, heading) ?: return null
+    return lines.subList(range.first, range.last + 1).joinToString("\n").trimEnd()
+}
+
+private fun markdownSectionRange(lines: List<String>, heading: String): IntRange? {
+    val start = lines.indexOfFirst { it.trimEnd() == heading }
+    if (start < 0) return null
+    val level = heading.takeWhile { it == '#' }.length
+    val end = lines.indexOfFirstFrom(start + 1) { line ->
+        val trimmed = line.trimStart()
+        val nextLevel = trimmed.takeWhile { it == '#' }.length
+        nextLevel in 1..level && trimmed.getOrNull(nextLevel) == ' '
+    }.let { if (it < 0) lines.size else it }
+    return start until end
+}
+
+private inline fun <T> List<T>.indexOfFirstFrom(start: Int, predicate: (T) -> Boolean): Int {
+    for (index in start until size) if (predicate(this[index])) return index
+    return -1
 }
 
 internal fun validatedContainerWorkingDirectory(path: String): String {

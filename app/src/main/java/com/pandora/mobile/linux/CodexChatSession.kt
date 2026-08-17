@@ -608,6 +608,8 @@ class CodexChatSession(
 
     private fun appendAgentDelta(itemId: String, delta: String) {
         if (itemId.isBlank() || delta.isEmpty()) return
+        val existingMessageId = assistantMessageIds[itemId]
+        if (existingMessageId == null && delta.isBlank()) return
         val messageId = assistantMessageIds.getOrPut(itemId) { UUID.randomUUID().toString() }
         val current = _messages.value.toMutableList()
         val index = current.indexOfFirst { it.id == messageId }
@@ -632,7 +634,18 @@ class CodexChatSession(
         if (item == null || item.optString("type") != "agentMessage") return
         val itemId = item.optString("id")
         val text = item.optString("text").trim()
-        if (itemId.isBlank() || text.isBlank()) return
+        if (itemId.isBlank()) return
+        if (text.isBlank()) {
+            assistantMessageIds.remove(itemId)?.let { messageId ->
+                _messages.value = _messages.value.filterNot { message ->
+                    message.id == messageId &&
+                        message.role == ChatRole.ASSISTANT &&
+                        message.text.isBlank() &&
+                        message.attachments.isEmpty()
+                }
+            }
+            return
+        }
         val messageId = assistantMessageIds.getOrPut(itemId) { UUID.randomUUID().toString() }
         val completed = ChatMessage(
             id = messageId,
@@ -781,6 +794,11 @@ internal fun agentDisplayText(text: String): String = standaloneAgentFileLink
     .let { value -> agentFileLink.replace(value) { match -> match.groupValues[1] } }
     .replace(Regex("\\n{3,}"), "\n\n")
     .trim()
+
+internal fun isRenderableChatMessage(message: ChatMessage): Boolean =
+    message.role != ChatRole.ASSISTANT ||
+        agentDisplayText(message.text).isNotBlank() ||
+        message.attachments.isNotEmpty()
 
 internal fun guessAttachmentMimeType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
         "apk" -> "application/vnd.android.package-archive"

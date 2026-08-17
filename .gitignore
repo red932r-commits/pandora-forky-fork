@@ -14,3 +14,5 @@ keystore.properties
 *.apk
 *.aab
 EMULATOR_QA.local.md
+/.agents
+skills-lock.json

@@ -6,6 +6,30 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+## 0.1.5 - 2026-08-17
+
+### Added
+
+- Added app-owned hands-free Voice Mode with background microphone and speech playback, ordered replies, and talk-to-interrupt support.
+- Added build version and date metadata to Settings.
+- Added determinate progress reporting for workspace backup and restore.
+
+### Changed
+
+- Improved on-device speech startup, natural pause chunking, voice speed control, and ordered assistant-response playback.
+- Made workspace catalogs recoverable, terminal transport lossless, and backup and restore operations transactional.
+- Centralized short-lived Codex RPC calls and tightened cleanup around chats, terminals, backups, and ADB control.
+
+### Fixed
+
+- Refresh authenticated phone-control instructions at startup while preserving user-authored agent guidance.
+- Render attachment-only agent responses without blank message actions or duplicate placeholder content.
+- Suppress agent completion notifications while Pandora is already in the foreground.
+
+### Security
+
+- Require authenticated, explicitly bounded ADB control sessions with a session-scoped device serial and transport teardown when control ends.
+
 ## 0.1.4 - 2026-08-16
 
 ### Added

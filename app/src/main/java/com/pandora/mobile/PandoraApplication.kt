@@ -10,6 +10,9 @@ class PandoraApplication : Application() {
     val chatSessions: CodexChatSessionManager by lazy { CodexChatSessionManager(this) }
     val speechModels: SpeechModelManager by lazy { SpeechModelManager(this) }
     val onDeviceSpeech: OnDeviceSpeech by lazy { OnDeviceSpeech(this, speechModels) }
+    internal val voiceMode: VoiceMode by lazy {
+        VoiceMode(OnDeviceVoiceModeSpeechAdapter(onDeviceSpeech))
+    }
     val adbPlugin: AdbPluginManager by lazy { AdbPluginManager(this) }
     val workspaceCoordinator: WorkspaceCoordinator by lazy {
         WorkspaceCoordinator(
@@ -43,6 +46,7 @@ class PandoraApplication : Application() {
 
     override fun onTerminate() {
         unregisterActivityLifecycleCallbacks(visibility)
+        voiceMode.close()
         onDeviceSpeech.releaseWarmModels()
         chatSessions.stopAll()
         terminalSessions.stopAll()

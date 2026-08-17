@@ -3,6 +3,8 @@ package com.pandora.mobile.linux
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CodexChatAttachmentTest {
@@ -60,6 +62,18 @@ class CodexChatAttachmentTest {
         val text = "$longBody\n\n- [result.zip](/root/project/result.zip)"
 
         assertEquals(longBody, agentDisplayText(text))
+    }
+
+    @Test
+    fun hidesAssistantEventsWithoutVisibleContent() {
+        assertFalse(isRenderableChatMessage(ChatMessage(role = ChatRole.ASSISTANT, text = "\n  \t")))
+        assertFalse(
+            isRenderableChatMessage(
+                ChatMessage(role = ChatRole.ASSISTANT, text = "- [missing.txt](/root/missing.txt)"),
+            ),
+        )
+        assertTrue(isRenderableChatMessage(ChatMessage(role = ChatRole.ASSISTANT, text = "Build complete")))
+        assertTrue(isRenderableChatMessage(ChatMessage(role = ChatRole.USER, text = "")))
     }
 
     @Test

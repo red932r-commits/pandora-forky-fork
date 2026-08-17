@@ -139,9 +139,6 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pandora.mobile.linux.CodexLimitWindow
 import com.pandora.mobile.linux.CodexLimitsState
 import com.pandora.mobile.linux.ChatAttachment
@@ -159,6 +156,7 @@ import com.pandora.mobile.linux.CodexUsageReader
 import com.pandora.mobile.linux.ArchiveCatalog
 import com.pandora.mobile.linux.ArchivedWorkspace
 import com.pandora.mobile.linux.agentDisplayText
+import com.pandora.mobile.linux.isRenderableChatMessage
 import com.pandora.mobile.linux.PtyTerminalSession
 import com.pandora.mobile.linux.PandoraProject
 import com.pandora.mobile.linux.ProjectCatalog
@@ -3103,9 +3101,11 @@ private fun ChatScreen(
     val application = context.applicationContext as PandoraApplication
     val speech = application.onDeviceSpeech
     val speechModels = application.speechModels
+    val voiceMode = application.voiceMode
     val dictation by speech.dictation.collectAsState()
     val dictationDiagnostics by speech.diagnostics.collectAsState()
     val playback by speech.playback.collectAsState()
+    val voiceModeState by voiceMode.state.collectAsState()
     var draft by remember { mutableStateOf("") }
     var dictationPrefix by remember { mutableStateOf("") }
     var missingSpeechKind by remember { mutableStateOf<SpeechModelKind?>(null) }
@@ -3116,22 +3116,17 @@ private fun ChatScreen(
     var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
     val chatScope = rememberCoroutineScope()
     val messages by session.messages.collectAsState()
-    val completedAssistantMessages by session.completedAssistantMessages.collectAsState()
+    val displayedMessages = remember(messages) { messages.filter(::isRenderableChatMessage) }
     val state by session.state.collectAsState()
     val interrupting by session.interrupting.collectAsState()
     val models by session.models.collectAsState()
     val selectedModel by session.selectedModel.collectAsState()
     var modelMenuOpen by remember { mutableStateOf(false) }
-    var voiceModeEnabled by rememberSaveable { mutableStateOf(false) }
     var pendingVoiceModePermission by remember { mutableStateOf(false) }
-    var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
-    val queuedVoiceMessages = remember(session.id) { mutableStateListOf<ChatMessage>() }
-    val handledVoiceMessageIds = remember(session.id) {
-        completedAssistantMessages.mapTo(mutableSetOf()) { it.id }
-    }
-    var lastAutoSpokenId by remember {
+    var lastAutoReadMessageId by remember(session.id) {
         mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
     }
+    val voiceModeEnabled = voiceModeState.active && voiceModeState.sessionId == session.id
     val listState = rememberLazyListState()
     val ready = state is CodexChatState.Ready
     val detail = when (val current = state) {
@@ -3212,14 +3207,20 @@ private fun ChatScreen(
     }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::importAttachment)
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::importAttachment)
+    fun startVoiceMode() {
+        speech.cancelDictation()
+        speech.stopSpeaking()
+        draft = ""
+        dictationPrefix = ""
+        VoiceModeForegroundService.start(context, session.id)
+    }
     val microphonePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
             if (pendingVoiceModePermission) {
                 pendingVoiceModePermission = false
-                voiceModeEnabled = true
-                speech.startDictation(finishOnEndpoint = true)
+                startVoiceMode()
             } else {
                 speech.startDictation()
             }
@@ -3254,11 +3255,7 @@ private fun ChatScreen(
     }
     fun toggleVoiceMode() {
         if (voiceModeEnabled) {
-            voiceModeEnabled = false
-            pendingVoicePrompt = null
-            queuedVoiceMessages.clear()
-            speech.cancelDictation()
-            speech.stopSpeaking()
+            VoiceModeForegroundService.stop(context)
             return
         }
         val dictationModel = SpeechModels.find(AppSettings.speechToTextModel(context))
@@ -3271,19 +3268,15 @@ private fun ChatScreen(
             missingSpeechKind = SpeechModelKind.TEXT_TO_SPEECH
             return
         }
-        speech.cancelDictation()
-        draft = ""
-        dictationPrefix = ""
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceModeEnabled = true
-            speech.startDictation(finishOnEndpoint = true)
+            startVoiceMode()
         } else {
             pendingVoiceModePermission = true
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
     LaunchedEffect(dictation) {
-        if (voiceModeEnabled) return@LaunchedEffect
+        if (voiceModeState.active) return@LaunchedEffect
         val spoken = when (val current = dictation) {
             is DictationState.Listening -> current.text
             is DictationState.Finished -> current.text
@@ -3298,116 +3291,28 @@ private fun ChatScreen(
         }
         if (dictation is DictationState.Finished) speech.clearDictation()
     }
-    LaunchedEffect(voiceModeEnabled, dictation, playback, state) {
-        if (!voiceModeEnabled) return@LaunchedEffect
-        when (val current = dictation) {
-            is DictationState.Listening -> {
-                if (
-                    current.text.isNotBlank() &&
-                    (playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking)
-                ) {
-                    speech.stopSpeaking()
-                }
-            }
-            is DictationState.Finished -> {
-                val spoken = current.text.trim()
-                speech.clearDictation()
-                if (spoken.isNotBlank()) {
-                    speech.stopSpeaking()
-                    if (isVoiceStopCommand(spoken)) {
-                        pendingVoicePrompt = null
-                        if (state is CodexChatState.Running) session.interrupt()
-                    } else if (state is CodexChatState.Ready) {
-                        session.send(spoken)
-                    } else {
-                        pendingVoicePrompt = spoken
-                        if (state is CodexChatState.Running) session.interrupt()
-                    }
-                }
-            }
-            else -> Unit
-        }
+    LaunchedEffect(voiceModeState.lastSpokenMessageId) {
+        voiceModeState.lastSpokenMessageId?.let { lastAutoReadMessageId = it }
     }
-    LaunchedEffect(voiceModeEnabled, state, pendingVoicePrompt) {
-        val pending = pendingVoicePrompt
-        if (voiceModeEnabled && state is CodexChatState.Ready && !pending.isNullOrBlank()) {
-            if (session.send(pending)) pendingVoicePrompt = null
-        }
-    }
-    LaunchedEffect(voiceModeEnabled, state, playback, dictation) {
-        if (!voiceModeEnabled || dictation !is DictationState.Idle) return@LaunchedEffect
-        when (playback) {
-            SpeechPlaybackState.Loading -> Unit
-            SpeechPlaybackState.Speaking -> speech.startDictation(
-                finishOnEndpoint = true,
-                stopPlaybackFirst = false,
-            )
-            else -> speech.startDictation(finishOnEndpoint = true)
-        }
-    }
-    LaunchedEffect(completedAssistantMessages.size, voiceModeEnabled, pendingVoicePrompt) {
-        completedAssistantMessages.forEach { message ->
-            if (handledVoiceMessageIds.add(message.id) && voiceModeEnabled && pendingVoicePrompt == null) {
-                queuedVoiceMessages += message
-            }
-        }
-    }
-    LaunchedEffect(voiceModeEnabled, playback, queuedVoiceMessages.size, pendingVoicePrompt) {
-        if (
-            voiceModeEnabled &&
-            playback is SpeechPlaybackState.Idle &&
-            pendingVoicePrompt == null &&
-            queuedVoiceMessages.isNotEmpty()
-        ) {
-            val next = queuedVoiceMessages.removeAt(0)
-            lastAutoSpokenId = next.id
-            readAloud(next.text)
-        }
-    }
-    LaunchedEffect(
-        state,
-        messages.size,
-        voiceModeEnabled,
-        pendingVoicePrompt,
-        completedAssistantMessages.size,
-    ) {
+    LaunchedEffect(state, messages.size, voiceModeState.active) {
+        if (voiceModeState.active) return@LaunchedEffect
         val latest = messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.text.isNotBlank() }
-        if (state is CodexChatState.Ready && latest != null && latest.id != lastAutoSpokenId) {
-            if (voiceModeEnabled) {
-                if (pendingVoicePrompt == null && handledVoiceMessageIds.add(latest.id)) {
-                    queuedVoiceMessages += latest
-                }
-            } else {
-                lastAutoSpokenId = latest.id
-                if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
-            }
-        }
-    }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(session, lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                voiceModeEnabled = false
-                pendingVoicePrompt = null
-                queuedVoiceMessages.clear()
-                speech.cancelDictation()
-                speech.stopSpeaking()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            speech.cancelDictation()
-            speech.stopSpeaking()
+        if (state is CodexChatState.Ready && latest != null && latest.id != lastAutoReadMessageId) {
+            lastAutoReadMessageId = latest.id
+            if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
         }
     }
     DisposableEffect(session.id) {
         onDispose {
             pendingAttachments.forEach { ChatAttachmentStore.deletePending(context, it) }
+            if (!application.voiceMode.state.value.active) {
+                speech.cancelDictation()
+                speech.stopSpeaking()
+            }
         }
     }
-    LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    LaunchedEffect(displayedMessages.size, displayedMessages.lastOrNull()?.text) {
+        if (displayedMessages.isNotEmpty()) listState.animateScrollToItem(displayedMessages.lastIndex)
     }
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Row(
@@ -3476,7 +3381,7 @@ private fun ChatScreen(
             StatusPill()
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
-        if (messages.isEmpty()) {
+        if (displayedMessages.isEmpty()) {
             if (state is CodexChatState.Starting) {
                 InstallationProgress(
                     detail = (state as CodexChatState.Starting).detail,
@@ -3496,10 +3401,10 @@ private fun ChatScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp),
             ) {
-                itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+                itemsIndexed(displayedMessages, key = { _, message -> message.id }) { index, message ->
                     val startsAssistantGroup = message.role != ChatRole.ASSISTANT ||
                         index == 0 ||
-                        messages[index - 1].role != ChatRole.ASSISTANT
+                        displayedMessages[index - 1].role != ChatRole.ASSISTANT
                     ChatMessageRow(
                         message,
                         showAssistantIdentity = startsAssistantGroup,
@@ -3528,23 +3433,9 @@ private fun ChatScreen(
         }
         if (voiceModeEnabled) {
             VoiceModePanel(
-                label = when {
-                    playback is SpeechPlaybackState.Loading -> "Preparing Codex’s voice…"
-                    playback is SpeechPlaybackState.Speaking -> "Codex is speaking · talk to interrupt"
-                    dictation is DictationState.Loading -> "Getting the microphone ready…"
-                    dictation is DictationState.Transcribing -> "Finishing what you said…"
-                    (dictation as? DictationState.Listening)?.text?.isNotBlank() == true ->
-                        (dictation as DictationState.Listening).text
-                    state is CodexChatState.Running -> "Codex is working · you can interrupt"
-                    else -> "Listening · speak your request"
-                },
-                speaking = playback is SpeechPlaybackState.Loading || playback is SpeechPlaybackState.Speaking,
-                onInterrupt = {
-                    speech.cancelDictation()
-                    speech.stopSpeaking()
-                    pendingVoicePrompt = null
-                    if (state is CodexChatState.Running) session.interrupt()
-                },
+                label = voiceModeState.status,
+                speaking = voiceModeState.speaking,
+                onInterrupt = voiceMode::interrupt,
                 onEnd = ::toggleVoiceMode,
             )
         } else when (val current = dictation) {
@@ -3675,7 +3566,7 @@ private fun ChatScreen(
                             beginDictation()
                         }
                     },
-                    enabled = !voiceModeEnabled && ready && dictation !is DictationState.Transcribing,
+                    enabled = !voiceModeState.active && ready && dictation !is DictationState.Transcribing,
                     modifier = Modifier.size(48.dp),
                 ) {
                     if (dictation is DictationState.Transcribing) {
@@ -3685,7 +3576,7 @@ private fun ChatScreen(
                             if (dictation is DictationState.Loading || dictation is DictationState.Listening) Icons.Rounded.Stop else Icons.Rounded.MicNone,
                             contentDescription = if (dictation is DictationState.Loading || dictation is DictationState.Listening) "Stop dictation" else "Start dictation",
                             tint = when {
-                                voiceModeEnabled -> Muted
+                                voiceModeState.active -> Muted
                                 dictation is DictationState.Loading || dictation is DictationState.Listening ->
                                     MaterialTheme.colorScheme.error
                                 else -> Accent
@@ -4395,7 +4286,7 @@ private fun AssistantMessage(
             Spacer(Modifier.height(if (displayText.isBlank() && !showIdentity) 0.dp else 10.dp))
             AgentAttachmentGroup(message.attachments, onPreviewAttachment, onOpenAttachment)
         }
-        Row(Modifier.padding(top = 2.dp)) {
+        if (displayText.isNotBlank()) Row(Modifier.padding(top = 2.dp)) {
             IconButton(
                 onClick = {
                     clipboard.setText(AnnotatedString(message.text))

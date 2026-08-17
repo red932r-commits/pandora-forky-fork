@@ -85,6 +85,8 @@ class AdbPluginManager(private val context: Context) : Closeable {
         if (!started.compareAndSet(false, true)) return
         ensureBridgeToken()
         migrateLegacyAdbIdentity()
+        runCatching { installer.installAdbControlSkill() }
+            .onFailure { Log.w(TAG, "Could not refresh Android agent integrations", it) }
         bridge = AdbControlBridge(this).also(AdbControlBridge::start)
         if (_state.value.enabled && hasPairingKey()) {
             _state.value = _state.value.copy(stage = AdbPluginStage.PAIRED, detail = "Phone pairing is ready.")
