@@ -1,8 +1,22 @@
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val buildDate = providers.environmentVariable("SOURCE_DATE_EPOCH")
+    .orNull
+    ?.toLongOrNull()
+    ?.let { epochSeconds ->
+        Instant.ofEpochSecond(epochSeconds)
+            .atZone(ZoneOffset.UTC)
+            .toLocalDate()
+    }
+    ?: LocalDate.now()
 
 android {
     namespace = "com.pandora.mobile"
@@ -14,6 +28,7 @@ android {
         targetSdk = 35
         versionCode = 5
         versionName = "0.1.4"
+        buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
 
         ndk {
             abiFilters += "arm64-v8a"

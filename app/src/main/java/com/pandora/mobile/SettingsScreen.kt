@@ -70,6 +70,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.RootfsInstaller
@@ -527,7 +528,16 @@ fun SettingsScreen(
                     }
                 }
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(36.dp))
+            Text(
+                "Version ${BuildConfig.VERSION_NAME} · Build ${BuildConfig.VERSION_CODE} · Built ${BuildConfig.BUILD_DATE}",
+                modifier = Modifier.fillMaxWidth(),
+                color = SettingsMuted,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(4.dp))
         }
     }
 
