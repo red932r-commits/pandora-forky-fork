@@ -76,6 +76,7 @@ fun SkillsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationOptIn by remember { mutableStateOf(AppSettings.agentNotificationsEnabled(context)) }
+    var showControlPreflight by remember { mutableStateOf(false) }
     var notificationPermissionGranted by remember { mutableStateOf(hasNotificationPermission(context)) }
     var systemNotificationsEnabled by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
     val notificationPermission = rememberLauncherForActivityResult(
@@ -136,7 +137,7 @@ fun SkillsScreen(
                 Switch(
                     checked = controlReady,
                     onCheckedChange = { enabled ->
-                        if (enabled && !controlReady) onOpenSetup() else onEnabledChange(enabled)
+                        if (enabled && !controlReady) showControlPreflight = true else onEnabledChange(enabled)
                     },
                     modifier = Modifier.semantics { stateDescription = readiness.label },
                 )
@@ -168,7 +169,9 @@ fun SkillsScreen(
                     ReadinessLevel.WORKING -> "Continue setup"
                     else -> "Continue setup"
                 },
-                onClick = onOpenSetup,
+                onClick = {
+                    if (controlReady) onOpenSetup() else showControlPreflight = true
+                },
             )
         }
 
@@ -178,6 +181,17 @@ fun SkillsScreen(
             blocked = notificationsBlocked,
             onCheckedChange = onNotificationsChanged,
             onOpenSettings = { openNotificationSettings(context) },
+        )
+    }
+
+    if (showControlPreflight) {
+        ImpactPreflightSheet(
+            preflight = deviceControlPreflight(),
+            onConfirm = {
+                showControlPreflight = false
+                onOpenSetup()
+            },
+            onDismiss = { showControlPreflight = false },
         )
     }
 }

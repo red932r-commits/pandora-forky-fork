@@ -98,6 +98,8 @@ private enum class SettingsDestination(val title: String) {
 @Composable
 fun SettingsScreen(
     themePreference: AppSettings.ThemePreference,
+    activeChatCount: Int,
+    activeTerminalCount: Int,
     onThemePreferenceChanged: (AppSettings.ThemePreference) -> Unit,
     onBack: () -> Unit,
     onArchive: () -> Unit,
@@ -131,15 +133,20 @@ fun SettingsScreen(
                 onDeviceControl = onPlugins,
             )
             SettingsDestination.ACCOUNT_MODELS -> AccountAndModelsSettings(
+                activeChatCount = activeChatCount,
                 onCodexLogin = onCodexLogin,
                 onModelProviderChanged = onModelProviderChanged,
                 onChangeModelProvider = onChangeModelProvider,
             )
             SettingsDestination.TERMINAL_LINUX -> TerminalAndLinuxSettings(
+                activeChatCount = activeChatCount,
+                activeTerminalCount = activeTerminalCount,
                 onStopAllForRepair = onStopAllForRepair,
             )
             SettingsDestination.STORAGE_RECOVERY -> StorageAndRecoverySettings(
                 workspaceCoordinator = application.workspaceCoordinator,
+                activeChatCount = activeChatCount,
+                activeTerminalCount = activeTerminalCount,
                 onArchive = onArchive,
             )
             SettingsDestination.APPEARANCE -> AppearanceSettings(
@@ -330,6 +337,7 @@ private fun SettingsIndexRow(item: SettingsIndexItem) {
 
 @Composable
 private fun AccountAndModelsSettings(
+    activeChatCount: Int,
     onCodexLogin: () -> Unit,
     onModelProviderChanged: (ModelProviderMode) -> Unit,
     onChangeModelProvider: () -> Unit,
@@ -340,6 +348,8 @@ private fun AccountAndModelsSettings(
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
     val customConfigured = customProvider != null && ModelProviderSecretStore.hasApiKey(context)
     var providerMode by remember { mutableStateOf(ModelProviderSettings.mode(context)) }
+    var pendingProviderMode by remember { mutableStateOf<ModelProviderMode?>(null) }
+    var pendingProviderSetup by remember { mutableStateOf(false) }
 
     SettingsGroupTitle("Workspace on this device")
     SettingsInfoPanel(
@@ -360,11 +370,10 @@ private fun AccountAndModelsSettings(
         onClick = {
             if (customConfigured) {
                 if (providerMode != ModelProviderMode.CUSTOM) {
-                    onModelProviderChanged(ModelProviderMode.CUSTOM)
-                    providerMode = ModelProviderMode.CUSTOM
+                    pendingProviderMode = ModelProviderMode.CUSTOM
                 }
             } else {
-                onChangeModelProvider()
+                pendingProviderSetup = true
             }
         },
     )
@@ -377,8 +386,7 @@ private fun AccountAndModelsSettings(
         icon = Icons.Rounded.AutoAwesome,
         onClick = {
             if (providerMode != ModelProviderMode.CODEX) {
-                onModelProviderChanged(ModelProviderMode.CODEX)
-                providerMode = ModelProviderMode.CODEX
+                pendingProviderMode = ModelProviderMode.CODEX
             }
         },
     )
@@ -415,6 +423,33 @@ private fun AccountAndModelsSettings(
         enabled = codexInstalled,
         onClick = onChangeModelProvider,
     )
+
+    val pending = pendingProviderMode
+    if (pending != null || pendingProviderSetup) {
+        val target = when {
+            pendingProviderSetup -> "a new Codex OSS profile"
+            pending == ModelProviderMode.CODEX -> "OpenAI"
+            else -> customProvider?.defaultModel ?: "the saved remote provider"
+        }
+        ImpactPreflightSheet(
+            preflight = providerSwitchPreflight(activeChatCount, target),
+            onConfirm = {
+                pendingProviderMode = null
+                val openSetup = pendingProviderSetup
+                pendingProviderSetup = false
+                if (openSetup) {
+                    onChangeModelProvider()
+                } else if (pending != null) {
+                    onModelProviderChanged(pending)
+                    providerMode = pending
+                }
+            },
+            onDismiss = {
+                pendingProviderMode = null
+                pendingProviderSetup = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -459,10 +494,14 @@ private fun ProviderChoice(
 }
 
 @Composable
-private fun TerminalAndLinuxSettings(onStopAllForRepair: () -> Unit) {
+private fun TerminalAndLinuxSettings(
+    activeChatCount: Int,
+    activeTerminalCount: Int,
+    onStopAllForRepair: () -> Unit,
+) {
     val context = LocalContext.current
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
-    var showRepair by remember { mutableStateOf(false) }
+    var showRepairPreflight by remember { mutableStateOf(false) }
     var repairing by remember { mutableStateOf(false) }
     var repairStatus by remember { mutableStateOf<String?>(null) }
     var repairError by remember { mutableStateOf<String?>(null) }
@@ -529,57 +568,41 @@ private fun TerminalAndLinuxSettings(onStopAllForRepair: () -> Unit) {
         enabled = !repairing,
         onClick = {
             repairError = null
-            showRepair = true
+            showRepairPreflight = true
         },
     )
-    repairStatus?.takeIf { !showRepair }?.let { status ->
+    repairStatus?.let { status ->
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
 
-    if (showRepair) {
-        AlertDialog(
-            onDismissRequest = { if (!repairing) showRepair = false },
-            title = { Text(if (repairing) "Repairing Linux…" else "Repair Linux container?") },
-            text = {
-                Text(
-                    repairError ?: if (repairing) {
-                        repairStatus ?: "Preparing repair…"
-                    } else {
-                        "All Linux sessions will stop. Debian system files and installed packages will reset. Files and projects in /root will remain untouched."
-                    },
-                )
-            },
-            confirmButton = {
-                if (repairing) {
-                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    TextButton(onClick = {
-                        repairing = true
-                        repairStatus = "Preparing repair…"
-                        repairError = null
-                        onStopAllForRepair()
-                        scope.launch {
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    RootfsInstaller(context.applicationContext).repair { repairStatus = it }
-                                }
-                            }.onSuccess {
-                                repairing = false
-                                repairStatus = "Repair complete"
-                                showRepair = false
-                            }.onFailure { error ->
-                                repairing = false
-                                repairError = "Repair failed: ${error.message}"
-                            }
+    repairError?.let { error ->
+        Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+    }
+
+    if (showRepairPreflight) {
+        ImpactPreflightSheet(
+            preflight = repairPreflight(activeChatCount, activeTerminalCount),
+            onConfirm = {
+                showRepairPreflight = false
+                repairing = true
+                repairStatus = "Preparing repair…"
+                repairError = null
+                onStopAllForRepair()
+                scope.launch {
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            RootfsInstaller(context.applicationContext).repair { repairStatus = it }
                         }
-                    }) { Text("Repair") }
+                    }.onSuccess {
+                        repairing = false
+                        repairStatus = "Repair complete"
+                    }.onFailure { error ->
+                        repairing = false
+                        repairError = "Repair failed: ${error.message}"
+                    }
                 }
             },
-            dismissButton = {
-                if (!repairing) TextButton(onClick = { showRepair = false }) {
-                    Text(if (repairError == null) "Cancel" else "Close")
-                }
-            },
+            onDismiss = { showRepairPreflight = false },
         )
     }
 }
@@ -587,6 +610,8 @@ private fun TerminalAndLinuxSettings(onStopAllForRepair: () -> Unit) {
 @Composable
 private fun StorageAndRecoverySettings(
     workspaceCoordinator: WorkspaceCoordinator,
+    activeChatCount: Int,
+    activeTerminalCount: Int,
     onArchive: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -595,6 +620,7 @@ private fun StorageAndRecoverySettings(
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var backupProgress by remember { mutableStateOf<WorkspaceBackup.Progress?>(null) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
+    var showBackupPreflight by remember { mutableStateOf(false) }
     val createBackup = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
     ) { uri ->
@@ -636,8 +662,7 @@ private fun StorageAndRecoverySettings(
         enabled = !backupBusy,
         onClick = {
             backupProgress = null
-            val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
-            createBackup.launch("pandora-backup-$stamp.zip")
+            showBackupPreflight = true
         },
     )
     ArchitectureDivider()
@@ -696,45 +721,44 @@ private fun StorageAndRecoverySettings(
         summary = "${architectureFormatBytes(storage.first)} free of ${architectureFormatBytes(storage.second)}",
     )
 
-    if (restoreUri != null) {
-        AlertDialog(
-            onDismissRequest = { if (!backupBusy) restoreUri = null },
-            title = { Text("Replace Linux workspace?") },
-            text = {
-                Text(
-                    "Everything currently stored in /root will be replaced, including projects and account sessions. Pandora validates and stages the backup before changing the workspace.",
-                )
+    if (showBackupPreflight) {
+        ImpactPreflightSheet(
+            preflight = backupPreflight(activeChatCount, activeTerminalCount),
+            onConfirm = {
+                showBackupPreflight = false
+                val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
+                createBackup.launch("pandora-backup-$stamp.zip")
             },
-            confirmButton = {
-                TextButton(
-                    enabled = !backupBusy,
-                    onClick = {
-                        val uri = restoreUri ?: return@TextButton
-                        backupBusy = true
-                        backupStatus = "Restoring backup…"
-                        backupProgress = null
-                        scope.launch {
-                            val result = runCatching {
-                                workspaceCoordinator.restoreBackup {
-                                    checkNotNull(context.contentResolver.openInputStream(uri)) {
-                                        "Could not open the selected backup"
-                                    }
-                                }
+            onDismiss = { showBackupPreflight = false },
+        )
+    }
+
+    val selectedRestoreUri = restoreUri
+    if (selectedRestoreUri != null) {
+        ImpactPreflightSheet(
+            preflight = restorePreflight(activeChatCount, activeTerminalCount),
+            onConfirm = {
+                restoreUri = null
+                backupBusy = true
+                backupStatus = "Restoring backup…"
+                backupProgress = null
+                scope.launch {
+                    val result = runCatching {
+                        workspaceCoordinator.restoreBackup {
+                            checkNotNull(context.contentResolver.openInputStream(selectedRestoreUri)) {
+                                "Could not open the selected backup"
                             }
-                            result.onSuccess {
-                                backupStatus = "Restore complete · ${it.files} entries · ${architectureFormatBytes(it.bytes)}"
-                            }.onFailure {
-                                backupStatus = "Restore failed: ${it.message}"
-                            }
-                            backupBusy = false
-                            restoreUri = null
                         }
-                    },
-                ) { Text("Replace and restore") }
+                    }
+                    result.onSuccess {
+                        backupStatus = "Restore complete · ${it.files} entries · ${architectureFormatBytes(it.bytes)}"
+                    }.onFailure {
+                        backupStatus = "Restore failed: ${it.message}"
+                    }
+                    backupBusy = false
+                }
             },
-            dismissButton = {
-                TextButton(enabled = !backupBusy, onClick = { restoreUri = null }) { Text("Cancel") }
-            },
+            onDismiss = { restoreUri = null },
         )
     }
 }

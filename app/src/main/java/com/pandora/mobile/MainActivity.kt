@@ -386,6 +386,12 @@ private fun PandoraApp() {
                     }
                     Screen.Settings -> SettingsScreen(
                         themePreference = themePreference,
+                        activeChatCount = chatSessions.count { chat ->
+                            chat.state.value !is CodexChatState.Closed && chat.state.value !is CodexChatState.Failed
+                        },
+                        activeTerminalCount = sessions.count { terminal ->
+                            terminal.state.value in setOf(PtyTerminalSession.State.PREPARING, PtyTerminalSession.State.RUNNING)
+                        },
                         onThemePreferenceChanged = {
                             AppSettings.setTheme(context, it)
                             themePreference = it
