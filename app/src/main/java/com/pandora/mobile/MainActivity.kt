@@ -182,7 +182,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Onboarding, Home, Chat, Container, Settings, Voice, CustomProvider, Skills, AdbSetup, Archive }
+private enum class Screen { Onboarding, Home, Chat, Changes, Container, Settings, Voice, CustomProvider, Skills, AdbSetup, Archive }
 
 private sealed interface OnboardingState {
     data object Welcome : OnboardingState
@@ -216,6 +216,7 @@ private fun PandoraApp() {
     var settingsReturnScreen by rememberSaveable { mutableStateOf(Screen.Home) }
     var selectedSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedChatSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedReviewDirectory by rememberSaveable { mutableStateOf<String?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
@@ -293,6 +294,10 @@ private fun PandoraApp() {
                                 settingsReturnScreen = screen
                                 screen = Screen.Settings
                             },
+                            onReviewChanges = {
+                                selectedReviewDirectory = chat.workingDirectory
+                                screen = Screen.Changes
+                            },
                         )
                     }
                 }
@@ -359,6 +364,20 @@ private fun PandoraApp() {
                             LaunchedEffect(Unit) { screen = Screen.Home }
                         } else {
                             chatPane(selectedChat, true)
+                        }
+                    }
+                    Screen.Changes -> {
+                        val directory = selectedReviewDirectory
+                        if (directory == null) {
+                            LaunchedEffect(Unit) { screen = Screen.Home }
+                        } else {
+                            ChangesReviewScreen(
+                                workingDirectory = directory,
+                                onBack = {
+                                    selectedReviewDirectory = null
+                                    screen = if (selectedChatSessionId == null) Screen.Home else Screen.Chat
+                                },
+                            )
                         }
                     }
                     Screen.Container -> {
@@ -3107,6 +3126,7 @@ private fun ChatScreen(
     onBack: () -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
+    onReviewChanges: () -> Unit,
     showBackButton: Boolean = true,
 ) {
     BackHandler(onBack = onBack)
@@ -3139,6 +3159,8 @@ private fun ChatScreen(
     val providerMode = remember { ModelProviderSettings.mode(context) }
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
     var responseSettingsOpen by remember { mutableStateOf(false) }
+    val changesRepository = remember(context) { ChangesRepository(context) }
+    var changeSummary by remember(session.id) { mutableStateOf<ChangeSummary?>(null) }
     var pendingVoiceModePermission by remember { mutableStateOf(false) }
     var lastAutoReadMessageId by remember(session.id) {
         mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
@@ -3181,7 +3203,7 @@ private fun ChatScreen(
             }
             when (command.id) {
                 SlashCommandId.COMPACT -> if (!session.compact()) return
-                SlashCommandId.REVIEW -> if (!session.reviewUncommittedChanges()) return
+                SlashCommandId.REVIEW -> onReviewChanges()
                 SlashCommandId.STATUS -> session.showStatus()
                 SlashCommandId.MODEL -> {
                     val query = command.argument
@@ -3326,6 +3348,16 @@ private fun ChatScreen(
             if (AppSettings.speakAssistantResponses(context)) readAloud(latest.text)
         }
     }
+    LaunchedEffect(state) {
+        if (state is CodexChatState.Ready) {
+            changeSummary = when (val changes = withContext(Dispatchers.IO) {
+                changesRepository.load(session.workingDirectory)
+            }) {
+                is ChangesLoadState.Ready -> changes.summary.takeIf { it.files.isNotEmpty() }
+                else -> null
+            }
+        }
+    }
     DisposableEffect(session.id) {
         onDispose {
             pendingAttachments.forEach { ChatAttachmentStore.deletePending(context, it) }
@@ -3416,6 +3448,11 @@ private fun ChatScreen(
                             }
                         },
                     )
+                }
+                changeSummary?.let { summary ->
+                    item(key = "changes-ready") {
+                        ChangesReadyCard(summary = summary, onReview = onReviewChanges)
+                    }
                 }
             }
         }
