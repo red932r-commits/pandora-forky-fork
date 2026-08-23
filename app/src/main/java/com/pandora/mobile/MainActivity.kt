@@ -218,7 +218,10 @@ private fun PandoraApp() {
         )
     }
     var settingsReturnScreen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var voiceReturnScreen by rememberSaveable { mutableStateOf(Screen.Settings) }
+    var skillsReturnScreen by rememberSaveable { mutableStateOf(Screen.Settings) }
     var archiveReturnScreen by rememberSaveable { mutableStateOf(Screen.Settings) }
+    var pendingSettingsDestinationName by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedChatSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedReviewDirectory by rememberSaveable { mutableStateOf<String?>(null) }
@@ -276,6 +279,7 @@ private fun PandoraApp() {
                         onSearch = { screen = Screen.Search },
                         onSettings = {
                             settingsReturnScreen = screen
+                            pendingSettingsDestinationName = null
                             screen = Screen.Settings
                         },
                         onCodexLogin = {
@@ -301,6 +305,7 @@ private fun PandoraApp() {
                             },
                             onSettings = {
                                 settingsReturnScreen = screen
+                                pendingSettingsDestinationName = null
                                 screen = Screen.Settings
                             },
                             onReviewChanges = {
@@ -406,8 +411,21 @@ private fun PandoraApp() {
                                     screen = Screen.Container
                                 }
                                 is UniversalSearchTarget.Setting -> {
-                                    settingsReturnScreen = Screen.Search
-                                    screen = Screen.Settings
+                                    when (target.destination) {
+                                        UniversalSettingsDestination.VOICE -> {
+                                            voiceReturnScreen = Screen.Search
+                                            screen = Screen.Voice
+                                        }
+                                        UniversalSettingsDestination.DEVICE_CONTROL -> {
+                                            skillsReturnScreen = Screen.Search
+                                            screen = Screen.Skills
+                                        }
+                                        else -> {
+                                            pendingSettingsDestinationName = target.destination.settingsDestination?.name
+                                            settingsReturnScreen = Screen.Search
+                                            screen = Screen.Settings
+                                        }
+                                    }
                                 }
                                 UniversalSearchTarget.Archive -> {
                                     archiveReturnScreen = Screen.Search
@@ -483,6 +501,9 @@ private fun PandoraApp() {
                         }
                     }
                     Screen.Settings -> SettingsScreen(
+                        initialDestination = pendingSettingsDestinationName?.let { name ->
+                            SettingsDestination.entries.firstOrNull { it.name == name }
+                        },
                         themePreference = themePreference,
                         activeChatCount = chatSessions.count { chat ->
                             chat.state.value !is CodexChatState.Closed && chat.state.value !is CodexChatState.Failed
@@ -494,13 +515,22 @@ private fun PandoraApp() {
                             AppSettings.setTheme(context, it)
                             themePreference = it
                         },
-                        onBack = { screen = settingsReturnScreen },
+                        onBack = {
+                            pendingSettingsDestinationName = null
+                            screen = settingsReturnScreen
+                        },
                         onArchive = {
                             archiveReturnScreen = Screen.Settings
                             screen = Screen.Archive
                         },
-                        onPlugins = { screen = Screen.Skills },
-                        onVoice = { screen = Screen.Voice },
+                        onPlugins = {
+                            skillsReturnScreen = Screen.Settings
+                            screen = Screen.Skills
+                        },
+                        onVoice = {
+                            voiceReturnScreen = Screen.Settings
+                            screen = Screen.Voice
+                        },
                         onCodexLogin = {
                             // PRoot shares Android's network namespace, so Chrome can return
                             // directly to Codex's localhost callback. This avoids the device-code
@@ -528,7 +558,7 @@ private fun PandoraApp() {
                             sessionManager.stopAll()
                         },
                     )
-                    Screen.Voice -> VoiceSettingsScreen(onBack = { screen = Screen.Settings })
+                    Screen.Voice -> VoiceSettingsScreen(onBack = { screen = voiceReturnScreen })
                     Screen.CustomProvider -> CustomProviderOnboarding(
                         existingProvider = ModelProviderSettings.savedCustomProvider(context),
                         hasSavedApiKey = ModelProviderSecretStore.hasApiKey(context),
@@ -545,7 +575,7 @@ private fun PandoraApp() {
                     )
                     Screen.Skills -> SkillsScreen(
                         state = adbState,
-                        onBack = { screen = Screen.Settings },
+                        onBack = { screen = skillsReturnScreen },
                         onOpenSetup = { screen = Screen.AdbSetup },
                         onEnabledChange = context.adbPlugin::setEnabled,
                     )

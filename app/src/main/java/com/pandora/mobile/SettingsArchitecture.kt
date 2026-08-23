@@ -89,7 +89,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class SettingsDestination(val title: String) {
+internal enum class SettingsDestination(val title: String) {
     ACCOUNT_MODELS("Account & models"),
     TERMINAL_LINUX("Terminal & Linux"),
     STORAGE_RECOVERY("Storage & recovery"),
@@ -98,7 +98,8 @@ private enum class SettingsDestination(val title: String) {
 }
 
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
+    initialDestination: SettingsDestination? = null,
     themePreference: AppSettings.ThemePreference,
     activeChatCount: Int,
     activeTerminalCount: Int,
@@ -114,14 +115,15 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as PandoraApplication
-    var destinationName by rememberSaveable { mutableStateOf<String?>(null) }
+    var destinationName by rememberSaveable(initialDestination) { mutableStateOf(initialDestination?.name) }
+    val directEntry = rememberSaveable(initialDestination) { initialDestination != null }
     val destination = destinationName?.let { name ->
         SettingsDestination.entries.firstOrNull { it.name == name }
     }
     val navigateBack = {
-        if (destination == null) onBack() else destinationName = null
+        if (destination == null || directEntry) onBack() else destinationName = null
     }
-    BackHandler(enabled = destination != null) { destinationName = null }
+    BackHandler(enabled = destination != null) { navigateBack() }
 
     SettingsScaffold(
         title = destination?.title ?: "Settings",

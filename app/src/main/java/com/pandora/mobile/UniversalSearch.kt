@@ -38,9 +38,11 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -92,13 +94,39 @@ internal enum class UniversalSearchKind(val label: String) {
     ARCHIVE("Archive"),
 }
 
+internal enum class UniversalSettingsDestination(
+    val title: String,
+    val description: String,
+    val settingsDestination: SettingsDestination?,
+) {
+    ACCOUNT_MODELS(
+        "Account & models",
+        "Authentication, providers, models, and response defaults",
+        SettingsDestination.ACCOUNT_MODELS,
+    ),
+    VOICE("Voice", "On-device speech models, dictation, and playback", null),
+    DEVICE_CONTROL("Device control", "Android pairing and automation readiness", null),
+    TERMINAL_LINUX(
+        "Terminal & Linux",
+        "Shell behavior and Linux workspace tools",
+        SettingsDestination.TERMINAL_LINUX,
+    ),
+    STORAGE_RECOVERY(
+        "Storage & recovery",
+        "Backups, restore, repair, and data usage",
+        SettingsDestination.STORAGE_RECOVERY,
+    ),
+    APPEARANCE("Appearance", "Theme and display preferences", SettingsDestination.APPEARANCE),
+    DIAGNOSTICS("Diagnostics", "Logs, health checks, and build information", SettingsDestination.DIAGNOSTICS),
+}
+
 internal sealed interface UniversalSearchTarget {
     data class Project(val path: String) : UniversalSearchTarget
     data class Chat(val threadId: String, val cwd: String) : UniversalSearchTarget
     data class File(val path: String, val projectPath: String) : UniversalSearchTarget
     data class Command(val usage: String) : UniversalSearchTarget
     data class Terminal(val persistentName: String) : UniversalSearchTarget
-    data class Setting(val destination: String) : UniversalSearchTarget
+    data class Setting(val destination: UniversalSettingsDestination) : UniversalSearchTarget
     data object Archive : UniversalSearchTarget
 }
 
@@ -109,6 +137,11 @@ internal data class UniversalSearchItem(
     val subtitle: String,
     val keywords: String = "",
     val target: UniversalSearchTarget,
+)
+
+internal data class UniversalSearchIndex(
+    val items: List<UniversalSearchItem>,
+    val unavailableSources: List<String> = emptyList(),
 )
 
 internal enum class UniversalSearchFilter(val label: String) {
@@ -175,16 +208,22 @@ internal class UniversalSearchRepository(context: Context) {
     private val terminalCatalog = ZmxSessionCatalog(appContext)
     private val installer = RootfsInstaller(appContext)
 
-    fun load(): List<UniversalSearchItem> {
-        val archive = runCatching(archiveCatalog::read).getOrDefault(com.pandora.mobile.linux.ArchivedWorkspace())
+    fun load(): UniversalSearchIndex {
+        val unavailableSources = linkedSetOf<String>()
+        val archive = loadSearchSource(
+            label = "Archive",
+            fallback = com.pandora.mobile.linux.ArchivedWorkspace(),
+            unavailableSources = unavailableSources,
+            block = archiveCatalog::read,
+        )
         val projects = (
-            runCatching(projectCatalog::readRegistered).getOrDefault(emptyList()) +
-                runCatching(projectCatalog::discoverFolders).getOrDefault(emptyList())
+            loadSearchSource("Projects", emptyList(), unavailableSources, projectCatalog::readRegistered) +
+                loadSearchSource("Projects", emptyList(), unavailableSources, projectCatalog::discoverFolders)
         ).distinctBy { it.path }
-        val chats = runCatching(chatCatalog::readCached).getOrDefault(emptyList())
-        val terminals = runCatching(terminalCatalog::read).getOrDefault(emptyList())
+        val chats = loadSearchSource("Chats", emptyList(), unavailableSources, chatCatalog::readCached)
+        val terminals = loadSearchSource("Terminals", emptyList(), unavailableSources, terminalCatalog::read)
 
-        return buildList {
+        val items = buildList {
             projects.forEach { project ->
                 add(
                     UniversalSearchItem(
@@ -248,15 +287,15 @@ internal class UniversalSearchRepository(context: Context) {
                     ),
                 )
             }
-            SETTINGS.forEach { (title, description) ->
+            UniversalSettingsDestination.entries.forEach { destination ->
                 add(
                     UniversalSearchItem(
-                        id = "setting:$title",
+                        id = "setting:${destination.name}",
                         kind = UniversalSearchKind.SETTING,
-                        title = title,
-                        subtitle = description,
+                        title = destination.title,
+                        subtitle = destination.description,
                         keywords = "preferences configuration",
-                        target = UniversalSearchTarget.Setting(title),
+                        target = UniversalSearchTarget.Setting(destination),
                     ),
                 )
             }
@@ -270,8 +309,13 @@ internal class UniversalSearchRepository(context: Context) {
                     target = UniversalSearchTarget.Archive,
                 ),
             )
-            addAll(indexFiles(projects.map { it.path }))
+            addAll(
+                loadSearchSource("Files", emptyList(), unavailableSources) {
+                    indexFiles(projects.map { it.path })
+                },
+            )
         }
+        return UniversalSearchIndex(items = items, unavailableSources = unavailableSources.toList())
     }
 
     private fun indexFiles(projectPaths: List<String>): List<UniversalSearchItem> {
@@ -305,22 +349,23 @@ internal class UniversalSearchRepository(context: Context) {
     }
 
     private companion object {
-        val SETTINGS = listOf(
-            "Account & models" to "Authentication, providers, models, and response defaults",
-            "Voice" to "On-device speech models, dictation, and playback",
-            "Device control" to "Android pairing and automation readiness",
-            "Terminal & Linux" to "Shell behavior and Linux workspace tools",
-            "Storage & recovery" to "Backups, restore, repair, and data usage",
-            "Appearance" to "Theme and display preferences",
-            "Diagnostics" to "Logs, health checks, and build information",
-        )
         val IGNORED_DIRECTORIES = setOf(".git", ".gradle", ".idea", "build", "node_modules", "vendor", "dist")
     }
 }
 
+private inline fun <T> loadSearchSource(
+    label: String,
+    fallback: T,
+    unavailableSources: MutableSet<String>,
+    block: () -> T,
+): T = runCatching(block).getOrElse {
+    unavailableSources += label
+    fallback
+}
+
 private sealed interface UniversalSearchLoadState {
     data object Loading : UniversalSearchLoadState
-    data class Ready(val items: List<UniversalSearchItem>) : UniversalSearchLoadState
+    data class Ready(val index: UniversalSearchIndex) : UniversalSearchLoadState
     data class Failed(val detail: String) : UniversalSearchLoadState
 }
 
@@ -335,11 +380,13 @@ internal fun UniversalSearchScreen(
     var loadState by remember(repository) { mutableStateOf<UniversalSearchLoadState>(UniversalSearchLoadState.Loading) }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(UniversalSearchFilter.ALL) }
+    var loadRevision by remember { mutableStateOf(0) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val listState = rememberLazyListState()
 
-    LaunchedEffect(repository) {
+    LaunchedEffect(repository, loadRevision) {
+        loadState = UniversalSearchLoadState.Loading
         loadState = withContext(Dispatchers.IO) {
             runCatching(repository::load).fold(
                 onSuccess = UniversalSearchLoadState::Ready,
@@ -350,7 +397,7 @@ internal fun UniversalSearchScreen(
     }
 
     val filtered = remember(loadState, query, filter) {
-        val items = (loadState as? UniversalSearchLoadState.Ready)?.items.orEmpty()
+        val items = (loadState as? UniversalSearchLoadState.Ready)?.index?.items.orEmpty()
         filterUniversalSearch(items, query, filter)
     }
     val grouped = remember(filtered) { filtered.groupBy(UniversalSearchItem::kind) }
@@ -450,11 +497,19 @@ internal fun UniversalSearchScreen(
             is UniversalSearchLoadState.Failed -> SearchMessage(
                 title = "Search is unavailable",
                 detail = state.detail,
+                actionLabel = "Retry indexing",
+                onAction = { loadRevision += 1 },
             )
             is UniversalSearchLoadState.Ready -> if (filtered.isEmpty()) {
                 SearchMessage(
                     title = if (query.isBlank()) "Nothing in this category" else "No results for “${query.take(40)}”",
-                    detail = "Try a project, chat title, file path, setting, or slash command.",
+                    detail = if (state.index.unavailableSources.isEmpty()) {
+                        "Try a project, chat title, file path, setting, or slash command."
+                    } else {
+                        "No matches in the available sources. Could not index ${state.index.unavailableSources.joinToString()}."
+                    },
+                    actionLabel = if (state.index.unavailableSources.isEmpty()) null else "Retry indexing",
+                    onAction = if (state.index.unavailableSources.isEmpty()) null else ({ loadRevision += 1 }),
                 )
             } else {
                 LazyColumn(
@@ -463,6 +518,14 @@ internal fun UniversalSearchScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 18.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    if (state.index.unavailableSources.isNotEmpty()) {
+                        item("index-warning") {
+                            SearchIndexWarning(
+                                unavailableSources = state.index.unavailableSources,
+                                onRetry = { loadRevision += 1 },
+                            )
+                        }
+                    }
                     UniversalSearchKind.entries.forEach { kind ->
                         val section = grouped[kind].orEmpty()
                         if (section.isNotEmpty()) {
@@ -526,7 +589,12 @@ private fun UniversalSearchResultRow(item: UniversalSearchItem, onClick: () -> U
 }
 
 @Composable
-private fun SearchMessage(title: String, detail: String) {
+private fun SearchMessage(
+    title: String,
+    detail: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -535,6 +603,58 @@ private fun SearchMessage(title: String, detail: String) {
         Text(title, color = MaterialTheme.colorScheme.onBackground, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, lineHeight = 20.sp)
+        if (actionLabel != null && onAction != null) {
+            Spacer(Modifier.height(18.dp))
+            SearchRetryAction(actionLabel, onAction)
+        }
+    }
+}
+
+@Composable
+private fun SearchIndexWarning(unavailableSources: List<String>, onRetry: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp))
+            .padding(start = 13.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Rounded.WarningAmber,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Some results may be missing", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Could not index ${unavailableSources.joinToString()}.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+        Box(
+            Modifier.size(48.dp).clickable(onClickLabel = "Retry indexing", onClick = onRetry),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun SearchRetryAction(label: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
     }
 }
 

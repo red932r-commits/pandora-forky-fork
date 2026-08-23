@@ -1,6 +1,7 @@
 package com.pandora.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -52,5 +53,18 @@ class UniversalSearchTest {
 
         assertEquals(listOf("command:review"), result.map { it.id })
         assertTrue(result.all { it.kind == UniversalSearchKind.COMMAND })
+    }
+
+    @Test
+    fun settingsDestinationsAreUniqueAndTyped() {
+        val destinations = UniversalSettingsDestination.entries
+
+        assertEquals(destinations.size, destinations.map { it.title }.distinct().size)
+        assertEquals(
+            SettingsDestination.ACCOUNT_MODELS,
+            UniversalSettingsDestination.ACCOUNT_MODELS.settingsDestination,
+        )
+        assertNull(UniversalSettingsDestination.VOICE.settingsDestination)
+        assertNull(UniversalSettingsDestination.DEVICE_CONTROL.settingsDestination)
     }
 }
