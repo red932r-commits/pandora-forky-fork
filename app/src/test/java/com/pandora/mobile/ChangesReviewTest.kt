@@ -1,6 +1,7 @@
 package com.pandora.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChangesReviewTest {
@@ -39,5 +40,27 @@ class ChangesReviewTest {
         assertEquals(DiffLine(DiffLineKind.DELETION, "old", 5, null), lines[5])
         assertEquals(DiffLine(DiffLineKind.ADDITION, "new", null, 5), lines[6])
         assertEquals(DiffLine(DiffLineKind.ADDITION, "extra", null, 6), lines[7])
+    }
+
+    @Test
+    fun filtersIncludeRenamedFilesWithoutLosingTheOtherKinds() {
+        val files = listOf(
+            ChangedFile("changed.kt", ChangeKind.MODIFIED),
+            ChangedFile("moved.kt", ChangeKind.RENAMED),
+        )
+
+        assertEquals(listOf(files[1]), filterChangedFiles(files, ChangeKind.RENAMED))
+        assertEquals(files, filterChangedFiles(files, null))
+    }
+
+    @Test
+    fun diffOutputDistinguishesTextBinaryAndFailure() {
+        val text = classifyDiffOutput(1, "@@ -1 +1 @@\n-old\n+new", exitCodeOneIsDiff = true)
+        val binary = classifyDiffOutput(0, "Binary files a/image.png and b/image.png differ")
+        val failed = classifyDiffOutput(128, "fatal: bad revision")
+
+        assertTrue(text is DiffLoadState.Text)
+        assertTrue(binary is DiffLoadState.BinaryOrUnsupported)
+        assertEquals(DiffLoadState.Failed("fatal: bad revision"), failed)
     }
 }

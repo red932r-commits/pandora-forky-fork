@@ -98,6 +98,13 @@ sealed interface ChangesLoadState {
     data class Unavailable(val detail: String) : ChangesLoadState
 }
 
+sealed interface DiffLoadState {
+    data object Loading : DiffLoadState
+    data class Text(val lines: List<DiffLine>, val truncated: Boolean = false) : DiffLoadState
+    data class BinaryOrUnsupported(val detail: String) : DiffLoadState
+    data class Failed(val detail: String) : DiffLoadState
+}
+
 class ChangesRepository(context: Context) {
     private val installer = RootfsInstaller(context.applicationContext)
 
@@ -123,40 +130,71 @@ class ChangesRepository(context: Context) {
         )
     }
 
-    fun loadDiff(repositoryRoot: String, file: ChangedFile): List<DiffLine> {
+    fun loadDiff(repositoryRoot: String, file: ChangedFile): DiffLoadState {
+        var noIndexDiff = false
         val result = if (file.kind == ChangeKind.ADDED) {
             val tracked = runGit(repositoryRoot, "ls-files", "--error-unmatch", "--", file.path)
             if (tracked.exitCode == 0) {
                 runGit(repositoryRoot, "diff", "--no-ext-diff", "--unified=3", "HEAD", "--", file.path)
             } else {
+                noIndexDiff = true
                 runGit(repositoryRoot, "diff", "--no-index", "--unified=3", "--", "/dev/null", file.path)
             }
         } else {
             runGit(repositoryRoot, "diff", "--no-ext-diff", "--unified=3", "HEAD", "--", file.path)
         }
-        return parseUnifiedDiff(result.output)
+        return classifyDiffOutput(
+            exitCode = result.exitCode,
+            output = result.output,
+            exitCodeOneIsDiff = noIndexDiff,
+            truncated = result.truncated,
+        )
     }
 
     private fun runGit(workingDirectory: String, vararg args: String): LinuxCommandResult {
         val command = installer.containerCommandAt(workingDirectory, "/usr/bin/git", *args)
         val process = runCatching { installer.startContainerProcess(command, mergeError = true) }
             .getOrElse { return LinuxCommandResult(-1, it.message ?: "Could not start Git") }
-        val output = runCatching { process.inputStream.bufferedReader().use { it.readText() } }
-            .getOrDefault("")
-            .take(MAX_GIT_OUTPUT_CHARS)
+        val fullOutput = runCatching { process.inputStream.bufferedReader().use { it.readText() } }.getOrDefault("")
+        val output = fullOutput.take(MAX_GIT_OUTPUT_CHARS)
         val finished = process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         if (!finished) {
             installer.terminateProcessTree(process)
             return LinuxCommandResult(-1, "Git command timed out")
         }
-        return LinuxCommandResult(process.exitValue(), output)
+        return LinuxCommandResult(process.exitValue(), output, truncated = fullOutput.length > MAX_GIT_OUTPUT_CHARS)
     }
 
-    private data class LinuxCommandResult(val exitCode: Int, val output: String)
+    private data class LinuxCommandResult(val exitCode: Int, val output: String, val truncated: Boolean = false)
 
     private companion object {
         const val COMMAND_TIMEOUT_SECONDS = 20L
         const val MAX_GIT_OUTPUT_CHARS = 1_000_000
+    }
+}
+
+internal fun classifyDiffOutput(
+    exitCode: Int,
+    output: String,
+    exitCodeOneIsDiff: Boolean = false,
+    truncated: Boolean = false,
+): DiffLoadState {
+    val successful = exitCode == 0 || (exitCodeOneIsDiff && exitCode == 1)
+    if (!successful) {
+        return DiffLoadState.Failed(output.trim().ifBlank { "Git could not load this diff (exit $exitCode)." })
+    }
+    val trimmed = output.trim()
+    if (trimmed.contains("Binary files ", ignoreCase = true) || trimmed.contains("GIT binary patch")) {
+        return DiffLoadState.BinaryOrUnsupported("This file changed, but Git did not produce a text diff.")
+    }
+    if (trimmed.isBlank()) {
+        return DiffLoadState.BinaryOrUnsupported("No textual diff was produced for this file.")
+    }
+    val lines = parseUnifiedDiff(output)
+    return if (lines.isEmpty()) {
+        DiffLoadState.BinaryOrUnsupported("No textual diff was produced for this file.")
+    } else {
+        DiffLoadState.Text(lines, truncated)
     }
 }
 
@@ -186,6 +224,7 @@ fun parseChangedFiles(statusOutput: String, numstatOutput: String): List<Changed
 }
 
 fun parseUnifiedDiff(diff: String): List<DiffLine> {
+    if (diff.isBlank()) return emptyList()
     var oldLine = 0
     var newLine = 0
     var inHunk = false
@@ -215,6 +254,9 @@ fun parseUnifiedDiff(diff: String): List<DiffLine> {
         }
     }.toList()
 }
+
+internal fun filterChangedFiles(files: List<ChangedFile>, filter: ChangeKind?): List<ChangedFile> =
+    files.filter { filter == null || it.kind == filter }
 
 @Composable
 fun ChangesReviewScreen(
@@ -301,7 +343,8 @@ private fun ChangesList(
     modifier: Modifier = Modifier,
 ) {
     var filter by remember { mutableStateOf<ChangeKind?>(null) }
-    val filtered = summary.files.filter { filter == null || it.kind == filter }
+    val filtered = filterChangedFiles(summary.files, filter)
+    val counts = ChangeKind.entries.associateWith { kind -> summary.files.count { it.kind == kind } }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 18.dp, vertical = 16.dp),
@@ -319,14 +362,17 @@ private fun ChangesList(
                 Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ChangeFilter("All", filter == null) { filter = null }
-                ChangeFilter("Modified", filter == ChangeKind.MODIFIED) { filter = ChangeKind.MODIFIED }
-                ChangeFilter("Added", filter == ChangeKind.ADDED) { filter = ChangeKind.ADDED }
-                ChangeFilter("Deleted", filter == ChangeKind.DELETED) { filter = ChangeKind.DELETED }
+                ChangeFilter("All", summary.files.size, filter == null) { filter = null }
+                ChangeFilter("Modified", counts.getValue(ChangeKind.MODIFIED), filter == ChangeKind.MODIFIED) { filter = ChangeKind.MODIFIED }
+                ChangeFilter("Added", counts.getValue(ChangeKind.ADDED), filter == ChangeKind.ADDED) { filter = ChangeKind.ADDED }
+                ChangeFilter("Deleted", counts.getValue(ChangeKind.DELETED), filter == ChangeKind.DELETED) { filter = ChangeKind.DELETED }
+                ChangeFilter("Renamed", counts.getValue(ChangeKind.RENAMED), filter == ChangeKind.RENAMED) { filter = ChangeKind.RENAMED }
             }
             Spacer(Modifier.height(20.dp))
             if (summary.files.isEmpty()) {
                 ChangesEmpty(onRefresh)
+            } else if (filtered.isEmpty()) {
+                ChangesFilteredEmpty(filter, onShowAll = { filter = null })
             }
         }
         if (filtered.isNotEmpty()) {
@@ -352,7 +398,7 @@ private fun ChangeMetric(label: String, icon: androidx.compose.ui.graphics.vecto
 }
 
 @Composable
-private fun ChangeFilter(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun ChangeFilter(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .heightIn(min = 48.dp)
@@ -362,7 +408,11 @@ private fun ChangeFilter(label: String, selected: Boolean, onClick: () -> Unit) 
             .padding(horizontal = 15.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground, fontSize = 12.sp)
+        Text(
+            "$label $count",
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground,
+            fontSize = 12.sp,
+        )
     }
 }
 
@@ -424,6 +474,25 @@ private fun ChangesEmpty(onRefresh: () -> Unit) {
 }
 
 @Composable
+private fun ChangesFilteredEmpty(filter: ChangeKind?, onShowAll: () -> Unit) {
+    val label = filter?.let(::changeKindLabel)?.lowercase().orEmpty()
+    Column(Modifier.fillMaxWidth().padding(vertical = 46.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(Icons.Rounded.Description, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("No $label files", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(5.dp))
+        Text("Other changes are still available.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onShowAll).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Show all files", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
 private fun ChangesUnavailable(detail: String, onRefresh: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Icon(Icons.Rounded.WarningAmber, null, tint = Color(0xFFD18B27), modifier = Modifier.size(36.dp))
@@ -458,32 +527,56 @@ private fun DiffViewer(
     onAddToChat: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
-    var diff by remember(file.path) { mutableStateOf<List<DiffLine>?>(null) }
-    LaunchedEffect(summary.repositoryRoot, file.path) {
-        diff = withContext(Dispatchers.IO) { repository.loadDiff(summary.repositoryRoot, file) }
+    var revision by remember(file.path) { mutableStateOf(0) }
+    var diffState by remember(file.path) { mutableStateOf<DiffLoadState>(DiffLoadState.Loading) }
+    LaunchedEffect(summary.repositoryRoot, file.path, revision) {
+        diffState = DiffLoadState.Loading
+        diffState = withContext(Dispatchers.IO) { repository.loadDiff(summary.repositoryRoot, file) }
     }
     val index = summary.files.indexOfFirst { it.path == file.path }.coerceAtLeast(0)
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         ChangesHeader(file.path.substringAfterLast('/'), onBack, "${index + 1} of ${summary.files.size} · read-only")
-        val lines = diff
-        if (lines == null) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        } else if (lines.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text("No text diff is available for this file.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        when (val current = diffState) {
+            DiffLoadState.Loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
-        } else {
-            val horizontal = rememberScrollState()
-            val vertical = rememberScrollState()
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .horizontalScroll(horizontal)
-                    .verticalScroll(vertical)
-                    .widthIn(min = 520.dp),
-            ) {
-                lines.forEach { line -> DiffLineRow(line) }
+            is DiffLoadState.BinaryOrUnsupported -> DiffUnavailable(
+                title = "Text diff unavailable",
+                detail = current.detail,
+                retryLabel = "Retry diff",
+                onRetry = { revision++ },
+                modifier = Modifier.weight(1f),
+            )
+            is DiffLoadState.Failed -> DiffUnavailable(
+                title = "Could not load diff",
+                detail = current.detail,
+                retryLabel = "Retry diff",
+                onRetry = { revision++ },
+                modifier = Modifier.weight(1f),
+            )
+            is DiffLoadState.Text -> {
+                val horizontal = rememberScrollState()
+                val vertical = rememberScrollState()
+                Column(Modifier.weight(1f).fillMaxWidth()) {
+                    if (current.truncated) {
+                        Text(
+                            "Diff output reached the 1 MB display limit.",
+                            color = Color(0xFFD18B27),
+                            fontSize = 12.sp,
+                            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
+                        )
+                    }
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .horizontalScroll(horizontal)
+                            .verticalScroll(vertical)
+                            .widthIn(min = 520.dp),
+                    ) {
+                        current.lines.forEach { line -> DiffLineRow(line) }
+                    }
+                }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -511,6 +604,36 @@ private fun DiffViewer(
             ) {
                 Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = "Add diff to chat", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun DiffUnavailable(
+    title: String,
+    detail: String,
+    retryLabel: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.fillMaxWidth().padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Rounded.WarningAmber, null, tint = Color(0xFFD18B27), modifier = Modifier.size(34.dp))
+        Spacer(Modifier.height(12.dp))
+        Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp)
+        Spacer(Modifier.height(14.dp))
+        Row(
+            Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onRetry).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Refresh, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(retryLabel, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
         }
     }
 }

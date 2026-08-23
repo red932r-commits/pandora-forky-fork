@@ -328,14 +328,19 @@ internal object ComposerContextStore {
                 seed.summary.files.forEach { file ->
                     appendLine()
                     appendLine("### ${file.kind.name.lowercase()} ${file.path}")
-                    repository.loadDiff(seed.summary.repositoryRoot, file).forEach { line ->
-                        appendLine(
-                            when (line.kind) {
-                                DiffLineKind.ADDITION -> "+${line.text}"
-                                DiffLineKind.DELETION -> "-${line.text}"
-                                else -> line.text
-                            },
-                        )
+                    when (val diff = repository.loadDiff(seed.summary.repositoryRoot, file)) {
+                        is DiffLoadState.Text -> diff.lines.forEach { line ->
+                            appendLine(
+                                when (line.kind) {
+                                    DiffLineKind.ADDITION -> "+${line.text}"
+                                    DiffLineKind.DELETION -> "-${line.text}"
+                                    else -> line.text
+                                },
+                            )
+                        }
+                        is DiffLoadState.BinaryOrUnsupported -> appendLine("[Text diff unavailable: ${diff.detail}]")
+                        is DiffLoadState.Failed -> appendLine("[Diff failed: ${diff.detail}]")
+                        DiffLoadState.Loading -> appendLine("[Diff is still loading]")
                     }
                 }
             }
