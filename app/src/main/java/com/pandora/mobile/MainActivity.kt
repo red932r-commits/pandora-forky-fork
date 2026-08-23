@@ -3206,27 +3206,6 @@ private fun SessionCard(session: ManagedTerminalSession, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StatusPill(providerLabel: String) {
-    Column(
-        modifier = Modifier
-            .background(SoftSurface, RoundedCornerShape(13.dp))
-            .padding(horizontal = 10.dp, vertical = 7.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp).background(Color(0xFF55A76A), CircleShape))
-            Spacer(Modifier.width(6.dp))
-            Text("Workspace on device", color = Ink, fontSize = 10.sp, fontWeight = FontWeight.Medium)
-        }
-        Text(
-            "Model via $providerLabel",
-            color = Muted,
-            fontSize = 10.sp,
-            modifier = Modifier.padding(start = 12.dp),
-        )
-    }
-}
-
-@Composable
 private fun ActionCard(
     symbol: String,
     title: String,
@@ -3366,8 +3345,6 @@ private fun ChatScreen(
     val selectedModel by session.selectedModel.collectAsState()
     val selectedReasoningEffort by session.selectedReasoningEffort.collectAsState()
     val selectedServiceTier by session.selectedServiceTier.collectAsState()
-    val providerMode = remember { ModelProviderSettings.mode(context) }
-    val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
     var responseSettingsOpen by remember { mutableStateOf(false) }
     val changesRepository = remember(context) { ChangesRepository(context) }
     val contextRepository = remember(context) { ComposerContextRepository(context) }
@@ -3646,7 +3623,6 @@ private fun ChatScreen(
                 onClick = { responseSettingsOpen = true },
                 modifier = Modifier.weight(1f),
             )
-            StatusPill(modelRouteLabel(providerMode, customProvider, selectedModel))
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         if (displayedMessages.isEmpty()) {

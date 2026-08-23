@@ -1,8 +1,5 @@
 package com.pandora.mobile
 
-import java.net.URI
-import java.util.Locale
-
 enum class ReadinessLevel {
     OFF,
     SETUP_REQUIRED,
@@ -78,39 +75,4 @@ fun speechModelReadiness(state: SpeechModelDownload, selected: Boolean): Readine
         "Download failed",
         state.detail,
     )
-}
-
-fun modelRouteLabel(
-    mode: ModelProviderMode,
-    customProvider: CustomModelProvider?,
-    modelId: String?,
-): String = when (mode) {
-    ModelProviderMode.CODEX -> "OpenAI"
-    ModelProviderMode.CUSTOM -> {
-        val vendor = modelId
-            ?.substringBefore('/')
-            ?.takeIf { '/' in modelId }
-            ?.trim()
-            .orEmpty()
-        when {
-            vendor.isNotBlank() -> vendor.toDisplayName()
-            else -> runCatching { URI(customProvider?.baseUrl.orEmpty()).host.orEmpty() }
-                .getOrDefault("")
-                .substringBefore('.')
-                .takeIf(String::isNotBlank)
-                ?.toDisplayName()
-                ?: "remote provider"
-        }
-    }
-}
-
-private fun String.toDisplayName(): String = when (lowercase(Locale.US)) {
-    "deepseek" -> "DeepSeek"
-    "openrouter" -> "OpenRouter"
-    "openai" -> "OpenAI"
-    "anthropic" -> "Anthropic"
-    "google" -> "Google"
-    else -> replaceFirstChar { character ->
-        if (character.isLowerCase()) character.titlecase(Locale.US) else character.toString()
-    }
 }

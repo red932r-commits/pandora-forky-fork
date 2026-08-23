@@ -34,17 +34,4 @@ class ReadinessStatusTest {
         assertEquals(ReadinessLevel.SETUP_REQUIRED, status.level)
         assertEquals("Download required", status.label)
     }
-
-    @Test
-    fun modelRouteNamesInferenceVendorWithoutClaimingItIsLocal() {
-        assertEquals(
-            "DeepSeek",
-            modelRouteLabel(
-                ModelProviderMode.CUSTOM,
-                CustomModelProvider("https://openrouter.ai/api/v1", listOf("deepseek/deepseek-chat")),
-                "deepseek/deepseek-chat",
-            ),
-        )
-        assertEquals("OpenAI", modelRouteLabel(ModelProviderMode.CODEX, null, "gpt-5"))
-    }
 }
