@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,14 +32,13 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Archive
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.PhoneAndroid
@@ -74,6 +74,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pandora.mobile.linux.RootfsInstaller
@@ -216,13 +217,14 @@ private fun SettingsIndex(
     val adbState by application.adbPlugin.state.collectAsState()
     val provider = remember { ModelProviderSettings.mode(context) }
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
+    val customProviderHost = customProvider?.let { architectureProviderHost(it.baseUrl) }
     val linuxReady = remember { RootfsInstaller(context.applicationContext).isSetupComplete() }
     val items = listOf(
         SettingsIndexItem(
             title = "Account & models",
             summary = when (provider) {
                 ModelProviderMode.CODEX -> "ChatGPT · Codex"
-                ModelProviderMode.CUSTOM -> "Codex OSS · ${customProvider?.defaultModel ?: "provider configured"}"
+                ModelProviderMode.CUSTOM -> "Codex OSS · ${customProviderHost ?: "provider configured"}"
             },
             icon = Icons.Rounded.AccountCircle,
             action = { onOpen(SettingsDestination.ACCOUNT_MODELS) },
@@ -294,6 +296,7 @@ private fun SettingsIndexRow(item: SettingsIndexItem) {
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 74.dp)
             .clickable(role = Role.Button, onClickLabel = "Open ${item.title}", onClick = item.action)
             .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -323,6 +326,8 @@ private fun SettingsIndexRow(item: SettingsIndexItem) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Spacer(Modifier.width(10.dp))
@@ -346,6 +351,7 @@ private fun AccountAndModelsSettings(
     val codexInstalled = remember { File(context.filesDir, "linux-workspace/.local/bin/codex").exists() }
     val codexSignedIn = remember { File(context.filesDir, "linux-workspace/.codex/auth.json").exists() }
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
+    val customProviderHost = customProvider?.let { architectureProviderHost(it.baseUrl) }
     val customConfigured = customProvider != null && ModelProviderSecretStore.hasApiKey(context)
     var providerMode by remember { mutableStateOf(ModelProviderSettings.mode(context)) }
     var pendingProviderMode by remember { mutableStateOf<ModelProviderMode?>(null) }
@@ -362,11 +368,12 @@ private fun AccountAndModelsSettings(
     SettingsGroupTitle("Model provider · remote inference")
     ProviderChoice(
         title = "Codex OSS",
-        summary = customProvider?.let { "${it.defaultModel} · ${it.baseUrl}" }
-            ?: "OpenAI-compatible provider",
+        summary = customProvider?.let {
+            "Remote via ${customProviderHost ?: "saved provider"}\n${it.defaultModel.substringAfterLast('/')}"
+        } ?: "OpenAI-compatible endpoint\nConfigure a remote model",
         selected = providerMode == ModelProviderMode.CUSTOM,
         enabled = codexInstalled,
-        icon = Icons.Rounded.Key,
+        icon = Icons.Rounded.Hub,
         onClick = {
             if (customConfigured) {
                 if (providerMode != ModelProviderMode.CUSTOM) {
@@ -380,10 +387,17 @@ private fun AccountAndModelsSettings(
     Spacer(Modifier.height(10.dp))
     ProviderChoice(
         title = "Codex",
-        summary = "Hosted with your ChatGPT account",
+        summary = "Hosted by OpenAI\nUses your ChatGPT account",
         selected = providerMode == ModelProviderMode.CODEX,
         enabled = codexInstalled,
-        icon = Icons.Rounded.AutoAwesome,
+        icon = null,
+        customIcon = {
+            Image(
+                painter = painterResource(R.drawable.codex_mark),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+            )
+        },
         onClick = {
             if (providerMode != ModelProviderMode.CODEX) {
                 pendingProviderMode = ModelProviderMode.CODEX
@@ -415,11 +429,11 @@ private fun AccountAndModelsSettings(
     ArchitectureActionRow(
         title = "Codex OSS profile",
         subtitle = if (customConfigured) {
-            "${customProvider?.defaultModel} · edit endpoint, key, and models"
+            "${customProviderHost ?: "Saved provider"} · ${customProvider?.defaultModel?.substringAfterLast('/')}"
         } else {
             "Set up an OpenAI-compatible provider"
         },
-        icon = Icons.Rounded.Key,
+        icon = Icons.Rounded.Tune,
         enabled = codexInstalled,
         onClick = onChangeModelProvider,
     )
@@ -458,13 +472,19 @@ private fun ProviderChoice(
     summary: String,
     selected: Boolean,
     enabled: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    customIcon: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 94.dp)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f) else Color.Transparent,
+                RoundedCornerShape(15.dp),
+            )
             .border(1.dp, borderColor, RoundedCornerShape(15.dp))
             .clickable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .padding(14.dp),
@@ -474,13 +494,24 @@ private fun ProviderChoice(
             Modifier.size(44.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            when {
+                customIcon != null -> customIcon()
+                icon != null -> Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            }
         }
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(3.dp))
-            Text(summary, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 17.sp)
+            Text(
+                summary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Box(
             Modifier
@@ -882,6 +913,7 @@ private fun ArchitectureActionRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 68.dp)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = title, onClick = onClick)
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -903,7 +935,14 @@ private fun ArchitectureActionRow(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(3.dp))
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 17.sp)
+            Text(
+                subtitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Icon(
             Icons.AutoMirrored.Rounded.ArrowForward,
@@ -943,6 +982,18 @@ private fun architectureFormatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 -> "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024))
     bytes >= 1024L -> "%.1f KB".format(Locale.US, bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun architectureProviderHost(baseUrl: String): String {
+    val parsedHost = runCatching { Uri.parse(baseUrl).host }.getOrNull()
+    return parsedHost
+        ?.removePrefix("www.")
+        ?.takeIf(String::isNotBlank)
+        ?: baseUrl
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .substringBefore('/')
+            .ifBlank { "saved provider" }
 }
 
 private fun architectureBackupProgressLabel(progress: WorkspaceBackup.Progress): String {
