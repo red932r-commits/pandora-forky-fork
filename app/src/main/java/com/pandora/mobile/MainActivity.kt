@@ -3121,7 +3121,9 @@ private fun ChatScreen(
     val interrupting by session.interrupting.collectAsState()
     val models by session.models.collectAsState()
     val selectedModel by session.selectedModel.collectAsState()
-    var modelMenuOpen by remember { mutableStateOf(false) }
+    val selectedReasoningEffort by session.selectedReasoningEffort.collectAsState()
+    val selectedServiceTier by session.selectedServiceTier.collectAsState()
+    var responseSettingsOpen by remember { mutableStateOf(false) }
     var pendingVoiceModePermission by remember { mutableStateOf(false) }
     var lastAutoReadMessageId by remember(session.id) {
         mutableStateOf(messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.id)
@@ -3129,10 +3131,17 @@ private fun ChatScreen(
     val voiceModeEnabled = voiceModeState.active && voiceModeState.sessionId == session.id
     val listState = rememberLazyListState()
     val ready = state is CodexChatState.Ready
-    val detail = when (val current = state) {
+    val selectedModelDetails = models.firstOrNull { it.model == selectedModel }
+    val responseSummary = responseSettingsSummary(
+        model = selectedModelDetails,
+        fallbackModel = selectedModel ?: "Codex",
+        reasoningEffort = selectedReasoningEffort,
+        serviceTier = selectedServiceTier,
+    )
+    val headerSummary = when (val current = state) {
         is CodexChatState.Starting -> current.detail
-        is CodexChatState.Ready -> current.model
-        is CodexChatState.Running -> "${current.model} · working…"
+        is CodexChatState.Ready -> responseSummary
+        is CodexChatState.Running -> "$responseSummary · Working…"
         is CodexChatState.Failed -> "Connection failed"
         CodexChatState.Closed -> "Closed"
     }
@@ -3166,7 +3175,7 @@ private fun ChatScreen(
                             session.showCommandError("The model list is not available yet. Try again in a moment.")
                             return
                         }
-                        modelMenuOpen = true
+                        responseSettingsOpen = true
                     } else {
                         val selected = models.firstOrNull {
                             it.model.equals(query, ignoreCase = true) ||
@@ -3314,6 +3323,18 @@ private fun ChatScreen(
     LaunchedEffect(displayedMessages.size, displayedMessages.lastOrNull()?.text) {
         if (displayedMessages.isNotEmpty()) listState.animateScrollToItem(displayedMessages.lastIndex)
     }
+    if (responseSettingsOpen) {
+        ResponseSettingsSheet(
+            models = models,
+            selectedModel = selectedModel,
+            selectedReasoningEffort = selectedReasoningEffort,
+            selectedServiceTier = selectedServiceTier,
+            onSelectModel = { session.selectModel(it) },
+            onSelectReasoningEffort = { session.selectReasoningEffort(it) },
+            onSelectServiceTier = { session.selectServiceTier(it) },
+            onDismiss = { responseSettingsOpen = false },
+        )
+    }
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Row(
             modifier = Modifier
@@ -3324,60 +3345,19 @@ private fun ChatScreen(
         ) {
             if (showBackButton) {
                 Box(
-                    Modifier.size(40.dp).background(SoftSurface, CircleShape).clickable(onClick = onBack),
+                    Modifier.size(48.dp).background(SoftSurface, CircleShape).clickable(onClick = onBack),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Ink, modifier = Modifier.size(20.dp))
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(8.dp))
             }
-            Column(Modifier.weight(1f)) {
-                Text("Codex", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Box {
-                    Row(
-                        modifier = Modifier.clickable(enabled = models.isNotEmpty()) { modelMenuOpen = true },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            detail,
-                            color = if (models.isNotEmpty()) Accent else Muted,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                        )
-                        if (models.isNotEmpty()) {
-                            Icon(
-                                Icons.Rounded.KeyboardArrowDown,
-                                contentDescription = "Choose model",
-                                tint = Accent,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                    DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
-                        models.forEach { option ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(
-                                            option.displayName,
-                                            color = Ink,
-                                            fontSize = 14.sp,
-                                            fontWeight = if (option.model == selectedModel) FontWeight.Bold else FontWeight.Normal,
-                                        )
-                                        if (option.description.isNotBlank()) {
-                                            Text(option.description, color = Muted, fontSize = 11.sp, maxLines = 2)
-                                        }
-                                    }
-                                },
-                                onClick = {
-                                    session.selectModel(option.model)
-                                    modelMenuOpen = false
-                                },
-                            )
-                        }
-                    }
-                }
-            }
+            ResponseSettingsButton(
+                summary = headerSummary,
+                enabled = models.isNotEmpty(),
+                onClick = { responseSettingsOpen = true },
+                modifier = Modifier.weight(1f),
+            )
             StatusPill()
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))

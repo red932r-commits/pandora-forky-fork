@@ -46,14 +46,6 @@ data class ChatMessage(
     val systemTone: SystemMessageTone = SystemMessageTone.ERROR,
 )
 
-data class CodexModel(
-    val id: String,
-    val model: String,
-    val displayName: String,
-    val description: String,
-    val isDefault: Boolean,
-)
-
 sealed interface CodexChatState {
     data class Starting(val detail: String) : CodexChatState
     data class Ready(val model: String) : CodexChatState
@@ -120,6 +112,12 @@ class CodexChatSession(
     private val _selectedModel = MutableStateFlow<String?>(null)
     val selectedModel: StateFlow<String?> = _selectedModel.asStateFlow()
 
+    private val _selectedReasoningEffort = MutableStateFlow<String?>(null)
+    val selectedReasoningEffort: StateFlow<String?> = _selectedReasoningEffort.asStateFlow()
+
+    private val _selectedServiceTier = MutableStateFlow<String?>(null)
+    val selectedServiceTier: StateFlow<String?> = _selectedServiceTier.asStateFlow()
+
     @Volatile private var process: Process? = null
     @Volatile private var writer: BufferedWriter? = null
     @Volatile private var threadId: String? = null
@@ -160,6 +158,10 @@ class CodexChatSession(
             .put("threadId", activeThread)
             .put("input", buildTurnInput(prompt, attachments))
         _selectedModel.value?.let { params.put("model", it) }
+        _selectedReasoningEffort.value?.let { params.put("effort", it) }
+        selectedModelDetails()?.takeIf(CodexModel::serviceTiersAdvertised)?.let {
+            params.put("serviceTier", _selectedServiceTier.value ?: JSONObject.NULL)
+        }
         runCatching { attachmentIndex.record(activeThread, userOrdinal, prompt, attachments) }
             .onFailure { android.util.Log.w(TAG, "Could not persist attachment metadata", it) }
         return if (sendRequest(requestId, "turn/start", params)) {
@@ -187,10 +189,26 @@ class CodexChatSession(
     }
 
     fun selectModel(model: String): Boolean {
-        if (_models.value.none { it.model == model }) return false
+        val selection = _models.value.firstOrNull { it.model == model } ?: return false
         _selectedModel.value = model
+        _selectedReasoningEffort.value = selection.resolveReasoningEffort(_selectedReasoningEffort.value)
+        _selectedServiceTier.value = selection.resolveServiceTier(_selectedServiceTier.value)
         this.model = model
         if (_state.value is CodexChatState.Ready) _state.value = CodexChatState.Ready(model)
+        return true
+    }
+
+    fun selectReasoningEffort(effort: String): Boolean {
+        val selection = selectedModelDetails() ?: return false
+        if (selection.supportedReasoningEfforts.none { it.value == effort }) return false
+        _selectedReasoningEffort.value = effort
+        return true
+    }
+
+    fun selectServiceTier(serviceTier: String?): Boolean {
+        val selection = selectedModelDetails()?.takeIf(CodexModel::serviceTiersAdvertised) ?: return false
+        if (serviceTier != null && selection.serviceTiers.none { it.id == serviceTier }) return false
+        _selectedServiceTier.value = serviceTier
         return true
     }
 
@@ -223,6 +241,10 @@ class CodexChatSession(
             buildString {
                 appendLine("Session status")
                 appendLine("Model: $model")
+                _selectedReasoningEffort.value?.let { appendLine("Thinking: $it") }
+                if (selectedModelDetails()?.serviceTiersAdvertised == true) {
+                    appendLine("Speed: ${_selectedServiceTier.value ?: "standard"}")
+                }
                 appendLine("Working directory: $cwd")
                 appendLine("Thread: ${activeThreadId ?: "Starting"}")
                 appendLine("State: $stateLabel")
@@ -390,26 +412,18 @@ class CodexChatSession(
                 model = customProvider?.defaultModel
                     ?: result.optString("model", "Codex").ifBlank { "Codex" }
                 _selectedModel.value = model
+                _selectedReasoningEffort.value = result.optionalString("reasoningEffort")
+                _selectedServiceTier.value = result.optionalString("serviceTier")
                 loadHistory(result.optJSONObject("thread"))
                 _state.value = CodexChatState.Ready(model)
             }
             3 -> {
                 val data = message.optJSONObject("result")?.optJSONArray("data") ?: JSONArray()
-                _models.value = buildList {
-                    for (index in 0 until data.length()) {
-                        val item = data.optJSONObject(index) ?: continue
-                        val modelId = item.optString("model")
-                        if (modelId.isBlank()) continue
-                        add(
-                            CodexModel(
-                                id = item.optString("id", modelId),
-                                model = modelId,
-                                displayName = item.optString("displayName", modelId),
-                                description = item.optString("description"),
-                                isDefault = item.optBoolean("isDefault"),
-                            ),
-                        )
-                    }
+                _models.value = parseCodexModels(data)
+                selectedModelDetails()?.let { selection ->
+                    _selectedReasoningEffort.value =
+                        selection.resolveReasoningEffort(_selectedReasoningEffort.value)
+                    _selectedServiceTier.value = selection.resolveServiceTier(_selectedServiceTier.value)
                 }
             }
             else -> {
@@ -553,6 +567,20 @@ class CodexChatSession(
                 interruptRequestId = null
                 _interrupting.value = false
                 if (!closed.get()) _state.value = CodexChatState.Ready(model)
+            }
+            "thread/settings/updated" -> {
+                val settings = params.optJSONObject("threadSettings") ?: return
+                settings.optString("model").takeIf(String::isNotBlank)?.let { updatedModel ->
+                    model = updatedModel
+                    _selectedModel.value = updatedModel
+                    _state.value = when (_state.value) {
+                        is CodexChatState.Ready -> CodexChatState.Ready(updatedModel)
+                        is CodexChatState.Running -> CodexChatState.Running(updatedModel)
+                        else -> _state.value
+                    }
+                }
+                _selectedReasoningEffort.value = settings.optionalString("effort")
+                _selectedServiceTier.value = settings.optionalString("serviceTier")
             }
             "error" -> {
                 val detail = params.optString("message", "Codex reported an error")
@@ -710,10 +738,18 @@ class CodexChatSession(
         }.isSuccess
     }
 
+    private fun selectedModelDetails(): CodexModel? {
+        val selected = _selectedModel.value ?: return null
+        return _models.value.firstOrNull { it.model == selected }
+    }
+
     private companion object {
         const val TAG = "CodexChatSession"
     }
 }
+
+private fun JSONObject.optionalString(key: String): String? =
+    opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()?.takeIf(String::isNotBlank)
 
 internal data class CodexTurnInputSpec(
     val type: String,

@@ -96,20 +96,15 @@ class SystemAdbControlOverlay(
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         PixelFormat.TRANSLUCENT,
     ).apply {
-        gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        y = bottomControlInset() + appContext.dp(4)
+        gravity = Gravity.BOTTOM or Gravity.END
+        // Deliberately occupy the system-navigation zone instead of covering app controls.
+        x = appContext.dp(8)
+        y = appContext.dp(4)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setFitInsetsTypes(0)
-    }
-
-    private fun bottomControlInset(): Int {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return appContext.dp(9)
-        val insets = windowManager.currentWindowMetrics.windowInsets
-        return insets.getInsetsIgnoringVisibility(
-            WindowInsets.Type.navigationBars() or WindowInsets.Type.mandatorySystemGestures(),
-        ).bottom
     }
 
     private companion object {
