@@ -91,7 +91,7 @@ private val SettingsAccent: Color @Composable get() = androidx.compose.material3
 private val SettingsSoftSurface: Color @Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
 
 @Composable
-fun SettingsScreen(
+private fun LegacySettingsScreen(
     themePreference: AppSettings.ThemePreference,
     onThemePreferenceChanged: (AppSettings.ThemePreference) -> Unit,
     onBack: () -> Unit,
