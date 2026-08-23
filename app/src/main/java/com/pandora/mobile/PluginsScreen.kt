@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -53,6 +54,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,6 +72,7 @@ fun SkillsScreen(
     onOpenSetup: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var notificationOptIn by remember { mutableStateOf(AppSettings.agentNotificationsEnabled(context)) }
@@ -93,6 +97,8 @@ fun SkillsScreen(
     }
     val notificationsActive = notificationOptIn && notificationPermissionGranted && systemNotificationsEnabled
     val notificationsBlocked = notificationOptIn && !notificationsActive
+    val readiness = adbReadiness(state)
+    val controlReady = readiness.level in setOf(ReadinessLevel.READY, ReadinessLevel.ACTIVE)
     val onNotificationsChanged: (Boolean) -> Unit = { enabled ->
         notificationOptIn = enabled
         AppSettings.setAgentNotificationsEnabled(context, enabled)
@@ -103,13 +109,15 @@ fun SkillsScreen(
         }
     }
 
-    PluginPage(title = "Skills", onBack = onBack) {
+    PluginPage(title = "Device control", onBack = onBack) {
         Text(
-            "Manage how Codex works with Pandora and this device.",
+            "Pair Pandora with Android Wireless debugging before phone control can be enabled.",
             color = MaterialThemeColors.muted,
             fontSize = 13.sp,
             lineHeight = 18.sp,
         )
+        Spacer(Modifier.height(18.dp))
+        DeviceReadinessTimeline(readiness.level)
         Spacer(Modifier.height(22.dp))
         Column(
             Modifier
@@ -125,7 +133,13 @@ fun SkillsScreen(
                     Spacer(Modifier.height(2.dp))
                     Text("By Pandora · device skill", color = MaterialThemeColors.muted, fontSize = 12.sp)
                 }
-                Switch(checked = state.enabled, onCheckedChange = onEnabledChange)
+                Switch(
+                    checked = controlReady,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !controlReady) onOpenSetup() else onEnabledChange(enabled)
+                    },
+                    modifier = Modifier.semantics { stateDescription = readiness.label },
+                )
             }
             Spacer(Modifier.height(18.dp))
             Text("Let the Pandora agent control this phone", color = MaterialThemeColors.ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -145,24 +159,17 @@ fun SkillsScreen(
             Spacer(Modifier.height(18.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialThemeColors.line))
             Spacer(Modifier.height(16.dp))
-            if (state.enabled) {
-                StatusRow(state)
-                Spacer(Modifier.height(14.dp))
-                PrimaryPluginButton(
-                    label = when (state.stage) {
-                        AdbPluginStage.PAIRED,
-                        AdbPluginStage.CONNECTED -> "Review connection"
-                        AdbPluginStage.ERROR -> "Try setup again"
-                        else -> "Set up connection"
-                    },
-                    onClick = onOpenSetup,
-                )
-            } else {
-                PrimaryPluginButton(label = "Enable and set up") {
-                    onEnabledChange(true)
-                    onOpenSetup()
-                }
-            }
+            StatusRow(state)
+            Spacer(Modifier.height(14.dp))
+            PrimaryPluginButton(
+                label = when (readiness.level) {
+                    ReadinessLevel.READY, ReadinessLevel.ACTIVE -> "Review connection"
+                    ReadinessLevel.ERROR -> "Try setup again"
+                    ReadinessLevel.WORKING -> "Continue setup"
+                    else -> "Continue setup"
+                },
+                onClick = onOpenSetup,
+            )
         }
 
         Spacer(Modifier.height(32.dp))
@@ -172,6 +179,37 @@ fun SkillsScreen(
             onCheckedChange = onNotificationsChanged,
             onOpenSettings = { openNotificationSettings(context) },
         )
+    }
+}
+
+@Composable
+private fun DeviceReadinessTimeline(level: ReadinessLevel) {
+    val activeIndex = when (level) {
+        ReadinessLevel.OFF -> 0
+        ReadinessLevel.SETUP_REQUIRED, ReadinessLevel.ERROR, ReadinessLevel.WORKING -> 1
+        ReadinessLevel.READY -> 2
+        ReadinessLevel.ACTIVE -> 3
+    }
+    val labels = listOf("Off", "Setup required", "Ready", "Control active")
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        labels.forEachIndexed { index, label ->
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier.size(if (index == activeIndex) 18.dp else 13.dp).background(
+                        if (index == activeIndex) MaterialThemeColors.accent else MaterialThemeColors.line,
+                        CircleShape,
+                    ),
+                )
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    label,
+                    color = if (index == activeIndex) MaterialThemeColors.accent else MaterialThemeColors.muted,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = if (index == activeIndex) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+        }
     }
 }
 
@@ -242,6 +280,7 @@ fun AdbSetupScreen(
     onBeginPairing: () -> Unit,
     onRetry: () -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var developerOptionsEnabled by remember { mutableStateOf(developerOptionsEnabled(context)) }
@@ -516,22 +555,25 @@ private fun SetupInstruction(number: String, title: String, detail: String) {
 
 @Composable
 private fun StatusRow(state: AdbPluginState) {
-    val ready = state.stage in setOf(AdbPluginStage.PAIRED, AdbPluginStage.CONNECTED)
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val readiness = adbReadiness(state)
+    Row(verticalAlignment = Alignment.Top) {
         Box(
-            Modifier.size(8.dp).background(if (ready) Color(0xFF4E9A67) else MaterialThemeColors.muted, CircleShape),
+            Modifier.padding(top = 5.dp).size(8.dp).background(
+                when (readiness.level) {
+                    ReadinessLevel.READY, ReadinessLevel.ACTIVE -> Color(0xFF4E9A67)
+                    ReadinessLevel.ERROR -> androidx.compose.material3.MaterialTheme.colorScheme.error
+                    ReadinessLevel.WORKING -> MaterialThemeColors.accent
+                    else -> Color(0xFFD18B27)
+                },
+                CircleShape,
+            ),
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                state.controlActive -> "Control active"
-                ready -> "Ready"
-                state.stage == AdbPluginStage.ERROR -> "Setup needs attention"
-                else -> "Not connected"
-            },
-            color = MaterialThemeColors.muted,
-            fontSize = 12.sp,
-        )
+        Column {
+            Text(readiness.label, color = MaterialThemeColors.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(readiness.detail, color = MaterialThemeColors.muted, fontSize = 11.sp, lineHeight = 16.sp)
+        }
     }
 }
 

@@ -1,6 +1,9 @@
 package com.pandora.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -42,6 +45,10 @@ import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material.icons.rounded.WbSunny
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.MicNone
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -73,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.pandora.mobile.linux.RootfsInstaller
 import com.pandora.mobile.linux.WorkspaceBackup
 import java.io.File
@@ -636,15 +644,28 @@ private fun LegacySettingsScreen(
 
 @Composable
 fun VoiceSettingsScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val application = context.applicationContext as PandoraApplication
     val speechManager = application.speechModels
     val speechStates by speechManager.states.collectAsState()
     val dictationDiagnostics by application.onDeviceSpeech.diagnostics.collectAsState()
-    var selectedStt by remember { mutableStateOf(AppSettings.speechToTextModel(context)) }
+    var selectedStt by remember {
+        mutableStateOf(
+            AppSettings.speechToTextModel(context).takeIf { modelId ->
+                SpeechModels.find(modelId)?.let(speechManager::isInstalled) == true
+            }.orEmpty(),
+        )
+    }
     var dictationProcessor by remember { mutableStateOf(AppSettings.dictationProcessor(context)) }
     var refineWithWhisper by remember { mutableStateOf(AppSettings.refineDictationWithWhisper(context)) }
-    var selectedTts by remember { mutableStateOf(AppSettings.textToSpeechModel(context)) }
+    var selectedTts by remember {
+        mutableStateOf(
+            AppSettings.textToSpeechModel(context).takeIf { modelId ->
+                SpeechModels.find(modelId)?.let(speechManager::isInstalled) == true
+            }.orEmpty(),
+        )
+    }
     var voiceOverSpeed by remember { mutableFloatStateOf(AppSettings.voiceOverSpeed(context)) }
     var autoSpeak by remember { mutableStateOf(AppSettings.speakAssistantResponses(context)) }
 
@@ -675,7 +696,7 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(38.dp).background(SettingsSoftSurface, CircleShape).clickable(onClick = onBack),
+                Modifier.size(48.dp).background(SettingsSoftSurface, CircleShape).clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -692,6 +713,17 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(SettingsLine))
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(22.dp)) {
+            VoiceReadinessPanel(
+                speechStates = speechStates,
+                selectedStt = selectedStt,
+                selectedTts = selectedTts,
+                microphoneGranted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO,
+                ) == PackageManager.PERMISSION_GRANTED,
+                diagnostics = dictationDiagnostics,
+            )
+            Spacer(Modifier.height(22.dp))
             Text(
                 "Speech stays on this device. Models download only when you ask and unload after use.",
                 color = SettingsMuted,
@@ -824,8 +856,6 @@ fun VoiceSettingsScreen(onBack: () -> Unit) {
                         AppSettings.setTextToSpeechModel(context, model.id)
                     },
                     onDownload = {
-                        selectedTts = model.id
-                        AppSettings.setTextToSpeechModel(context, model.id)
                         speechManager.download(model)
                     },
                     onDelete = { deleteSpeechModel(model) },
@@ -899,6 +929,86 @@ private fun formatVoiceOverSpeed(speed: Float): String =
         .trimEnd('.') + "×"
 
 @Composable
+private fun VoiceReadinessPanel(
+    speechStates: Map<String, SpeechModelDownload>,
+    selectedStt: String,
+    selectedTts: String,
+    microphoneGranted: Boolean,
+    diagnostics: DictationDiagnostics,
+) {
+    val sttReady = selectedStt.isNotBlank() && speechStates[selectedStt] is SpeechModelDownload.Installed
+    val ttsReady = selectedTts.isNotBlank() && speechStates[selectedTts] is SpeechModelDownload.Installed
+    val setupComplete = sttReady && ttsReady && microphoneGranted
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .border(1.dp, SettingsLine, RoundedCornerShape(16.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (setupComplete) Icons.Rounded.CheckCircle else Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = if (setupComplete) androidx.compose.material3.MaterialTheme.colorScheme.secondary else Color(0xFFD18B27),
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.width(11.dp))
+            Column {
+                Text(
+                    if (setupComplete) "Voice ready" else "Voice setup incomplete",
+                    color = SettingsInk,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    if (setupComplete) "Dictation and reading are ready on this device." else "Finish each required step before using Voice Mode.",
+                    color = SettingsMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            }
+        }
+        Spacer(Modifier.height(15.dp))
+        VoiceReadinessRow(Icons.Rounded.GraphicEq, "Dictation model", sttReady, if (sttReady) "Ready" else "Choose a downloaded model")
+        Spacer(Modifier.height(10.dp))
+        VoiceReadinessRow(Icons.Rounded.RecordVoiceOver, "Reading voice", ttsReady, if (ttsReady) "Ready" else "Choose a downloaded voice")
+        Spacer(Modifier.height(10.dp))
+        VoiceReadinessRow(Icons.Rounded.MicNone, "Microphone permission", microphoneGranted, if (microphoneGranted) "Ready" else "Requested when you start dictation")
+        Spacer(Modifier.height(10.dp))
+        VoiceReadinessRow(
+            Icons.Rounded.Speed,
+            "Performance",
+            diagnostics.realTimeFactor != null && diagnostics.droppedAudioMillis == 0L,
+            if (diagnostics.realTimeFactor == null) "Not tested" else dictationDiagnosticsLabel(diagnostics),
+        )
+    }
+}
+
+@Composable
+private fun VoiceReadinessRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    ready: Boolean,
+    detail: String,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = SettingsAccent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = SettingsInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(detail, color = SettingsMuted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2)
+        }
+        Box(
+            Modifier.size(8.dp).background(
+                if (ready) androidx.compose.material3.MaterialTheme.colorScheme.secondary else Color(0xFFD18B27),
+                CircleShape,
+            ),
+        )
+    }
+}
+
+@Composable
 private fun ThemeChoice(
     label: String,
     selected: Boolean,
@@ -932,22 +1042,18 @@ private fun SpeechModelRow(
     onDelete: () -> Unit,
 ) {
     val downloading = state as? SpeechModelDownload.Downloading
-    val availability = when (state) {
-        SpeechModelDownload.Installed -> "installed"
-        SpeechModelDownload.NotInstalled -> "not installed"
-        is SpeechModelDownload.Downloading -> "downloading"
-        is SpeechModelDownload.Failed -> "download failed"
-    }
+    val readiness = speechModelReadiness(state, selected)
+    val installed = state is SpeechModelDownload.Installed
     Column(
         Modifier
             .fillMaxWidth()
-            .background(if (selected) androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer else Color.Transparent, RoundedCornerShape(16.dp))
-            .border(1.dp, if (selected) SettingsAccent else SettingsLine, RoundedCornerShape(16.dp))
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .background(if (selected && installed) androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer else Color.Transparent, RoundedCornerShape(16.dp))
+            .border(1.dp, if (selected && installed) SettingsAccent else SettingsLine, RoundedCornerShape(16.dp))
+            .selectable(selected = selected && installed, enabled = installed, role = Role.RadioButton, onClick = onSelect)
             .semantics {
                 stateDescription = buildString {
-                    append(if (selected) "Selected, " else "Not selected, ")
-                    append(availability)
+                    append(if (selected && installed) "Selected, " else "Not selected, ")
+                    append(readiness.label)
                 }
             }
             .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
@@ -989,6 +1095,22 @@ private fun SpeechModelRow(
         }
         Spacer(Modifier.height(7.dp))
         Text(model.description, color = SettingsMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        Spacer(Modifier.height(7.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(7.dp).background(
+                    when (readiness.level) {
+                        ReadinessLevel.ACTIVE, ReadinessLevel.READY -> androidx.compose.material3.MaterialTheme.colorScheme.secondary
+                        ReadinessLevel.ERROR -> androidx.compose.material3.MaterialTheme.colorScheme.error
+                        ReadinessLevel.WORKING -> SettingsAccent
+                        else -> Color(0xFFD18B27)
+                    },
+                    CircleShape,
+                ),
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(readiness.label, color = SettingsMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        }
         if (downloading != null) {
             Spacer(Modifier.height(10.dp))
             LinearProgressIndicator(

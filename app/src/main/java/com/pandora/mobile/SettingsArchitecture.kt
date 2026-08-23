@@ -57,6 +57,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -204,6 +205,8 @@ private fun SettingsIndex(
     onDeviceControl: () -> Unit,
 ) {
     val context = LocalContext.current
+    val application = context.applicationContext as PandoraApplication
+    val adbState by application.adbPlugin.state.collectAsState()
     val provider = remember { ModelProviderSettings.mode(context) }
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
     val linuxReady = remember { RootfsInstaller(context.applicationContext).isSetupComplete() }
@@ -225,7 +228,7 @@ private fun SettingsIndex(
         ),
         SettingsIndexItem(
             title = "Device control",
-            summary = if (AppSettings.adbPluginEnabled(context)) "Phone control enabled" else "Setup required",
+            summary = adbReadiness(adbState).label,
             icon = Icons.Rounded.PhoneAndroid,
             action = onDeviceControl,
         ),
@@ -346,7 +349,7 @@ private fun AccountAndModelsSettings(
     )
 
     Spacer(Modifier.height(26.dp))
-    SettingsGroupTitle("Model provider")
+    SettingsGroupTitle("Model provider · remote inference")
     ProviderChoice(
         title = "Codex OSS",
         summary = customProvider?.let { "${it.defaultModel} · ${it.baseUrl}" }
