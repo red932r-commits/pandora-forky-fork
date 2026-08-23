@@ -47,6 +47,13 @@ class ContextComposerTest {
     }
 
     @Test
+    fun terminalContextReportsEveryRedactedValue() {
+        val output = redactTerminalContext("API_KEY=one\nPASSWORD=two\nAuthorization: Bearer three")
+
+        assertEquals(3, countContextRedactions(output))
+    }
+
+    @Test
     fun emptyContextQueryKeepsDifferentSourceKindsVisible() {
         val files = (1..12).map { index ->
             ComposerContextSuggestion(ComposerContextSeed.FileReference("/root/project/File$index.kt"))

@@ -3364,11 +3364,14 @@ private fun ChatScreen(
     val pendingContexts = remember { mutableStateListOf<PreparedComposerContext>() }
     var attachmentMenuOpen by remember { mutableStateOf(false) }
     var contextPickerForced by remember { mutableStateOf(false) }
-    var contextSuggestions by remember(session.workingDirectory) { mutableStateOf<List<ComposerContextSuggestion>>(emptyList()) }
+    var contextIndex by remember(session.workingDirectory) { mutableStateOf(ComposerContextIndex(emptyList())) }
+    var contextIndexLoading by remember(session.workingDirectory) { mutableStateOf(true) }
+    var contextIndexRevision by remember(session.workingDirectory) { mutableStateOf(0) }
     var preparingContext by remember { mutableStateOf(false) }
     var importingAttachment by remember { mutableStateOf(false) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
+    var previewPreparedContext by remember { mutableStateOf<PreparedComposerContext?>(null) }
     val chatScope = rememberCoroutineScope()
     val messages by session.messages.collectAsState()
     val displayedMessages = remember(messages) { messages.filter(::isRenderableChatMessage) }
@@ -3409,10 +3412,15 @@ private fun ChatScreen(
             onInitialDraftConsumed()
         }
     }
-    LaunchedEffect(session.workingDirectory) {
-        contextSuggestions = withContext(Dispatchers.IO) {
-            runCatching { contextRepository.load(session.workingDirectory) }.getOrDefault(emptyList())
+    LaunchedEffect(session.workingDirectory, contextIndexRevision) {
+        contextIndexLoading = true
+        val loaded = withContext(Dispatchers.IO) {
+            runCatching { contextRepository.load(session.workingDirectory) }
         }
+        contextIndex = loaded.getOrElse {
+            ComposerContextIndex(emptyList(), listOf("Workspace context"))
+        }
+        contextIndexLoading = false
     }
     LaunchedEffect(initialContextSeeds) {
         if (initialContextSeeds.isEmpty()) return@LaunchedEffect
@@ -3771,13 +3779,16 @@ private fun ChatScreen(
                 }
             }
             val shownContextSuggestions = if (contextPickerForced || mentionQuery != null) {
-                filterContextSuggestions(contextSuggestions + terminalContextSuggestions, mentionQuery.orEmpty())
+                filterContextSuggestions(contextIndex.suggestions + terminalContextSuggestions, mentionQuery.orEmpty())
             } else {
                 emptyList()
             }
             if (contextPickerForced || mentionQuery != null) {
                 ComposerContextPalette(
                     suggestions = shownContextSuggestions,
+                    loading = contextIndexLoading,
+                    unavailableSources = contextIndex.unavailableSources,
+                    onRetry = { contextIndexRevision += 1 },
                     onSelect = { suggestion ->
                         contextPickerForced = false
                         draft = removeContextMention(draft)
@@ -3818,6 +3829,7 @@ private fun ChatScreen(
                     pendingContexts.forEach { prepared ->
                         PreparedContextChip(
                             context = prepared,
+                            onPreview = { previewPreparedContext = prepared },
                             onRemove = {
                                 pendingContexts.remove(prepared)
                                 ComposerContextStore.deletePending(context, prepared)
@@ -4027,6 +4039,12 @@ private fun ChatScreen(
         AttachmentPreviewDialog(
             attachment = attachment,
             onDismiss = { previewAttachment = null },
+        )
+    }
+    previewPreparedContext?.let { prepared ->
+        PreparedContextPreviewDialog(
+            context = prepared,
+            onDismiss = { previewPreparedContext = null },
         )
     }
 }

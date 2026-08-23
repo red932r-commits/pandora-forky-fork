@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Add
@@ -23,18 +25,29 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -46,8 +59,12 @@ import com.pandora.mobile.linux.ChatAttachment
 import com.pandora.mobile.linux.ChatAttachmentKind
 import com.pandora.mobile.linux.RootfsInstaller
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal enum class ComposerContextKind(val label: String) {
     FILE("File"),
@@ -100,6 +117,14 @@ internal data class PreparedComposerContext(
     val seed: ComposerContextSeed,
     val attachment: ChatAttachment,
     val generated: Boolean,
+    val capturedAtMillis: Long = System.currentTimeMillis(),
+    val truncated: Boolean = false,
+    val redactionCount: Int = 0,
+)
+
+internal data class ComposerContextIndex(
+    val suggestions: List<ComposerContextSuggestion>,
+    val unavailableSources: List<String> = emptyList(),
 )
 
 internal data class ContextHandoffRequest(
@@ -158,7 +183,7 @@ internal fun filterContextSuggestions(
         .toList()
 }
 
-internal fun redactTerminalContext(text: String, maxLines: Int = 120): String {
+internal fun redactTerminalContext(text: String, maxLines: Int = MAX_TERMINAL_CONTEXT_LINES): String {
     var redacted = text.lineSequence().takeLastCompat(maxLines).joinToString("\n").take(MAX_CONTEXT_CHARACTERS)
     SECRET_ASSIGNMENT_PATTERNS.forEach { pattern ->
         redacted = pattern.replace(redacted) { match -> "${match.groupValues[1]}${match.groupValues[2]}[REDACTED]" }
@@ -166,6 +191,17 @@ internal fun redactTerminalContext(text: String, maxLines: Int = 120): String {
     redacted = BEARER_PATTERN.replace(redacted) { "${it.groupValues[1]}[REDACTED]" }
     redacted = PRIVATE_KEY_PATTERN.replace(redacted, "-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----")
     return redacted.trim()
+}
+
+internal fun countContextRedactions(content: String): Int {
+    var count = 0
+    var offset = 0
+    while (true) {
+        val match = content.indexOf(REDACTED_MARKER, startIndex = offset)
+        if (match < 0) return count
+        count += 1
+        offset = match + REDACTED_MARKER.length
+    }
 }
 
 private fun Sequence<String>.takeLastCompat(count: Int): List<String> {
@@ -181,41 +217,46 @@ internal class ComposerContextRepository(context: Context) {
     private val appContext = context.applicationContext
     private val installer = RootfsInstaller(appContext)
 
-    fun load(workingDirectory: String): List<ComposerContextSuggestion> {
+    fun load(workingDirectory: String): ComposerContextIndex {
         val suggestions = mutableListOf<ComposerContextSuggestion>()
-        val projectDirectory = resolveWorkspacePath(workingDirectory)
-        if (projectDirectory?.isDirectory == true) {
-            projectDirectory.walkTopDown()
-                .onEnter { directory -> directory == projectDirectory || directory.name !in IGNORED_DIRECTORIES }
-                .filter(File::isFile)
-                .take(MAX_CONTEXT_FILES)
-                .forEach { file ->
+        val unavailableSources = mutableListOf<String>()
+        runCatching {
+            val projectDirectory = resolveWorkspacePath(workingDirectory)
+            if (projectDirectory?.isDirectory == true) {
+                projectDirectory.walkTopDown()
+                    .onEnter { directory -> directory == projectDirectory || directory.name !in IGNORED_DIRECTORIES }
+                    .filter(File::isFile)
+                    .take(MAX_CONTEXT_FILES)
+                    .forEach { file ->
+                        val relative = file.relativeTo(projectDirectory).invariantSeparatorsPath
+                        val path = "${workingDirectory.trimEnd('/')}/$relative"
+                        val artifact = file.extension.lowercase(Locale.ROOT) in ARTIFACT_EXTENSIONS
+                        suggestions += ComposerContextSuggestion(
+                            seed = ComposerContextSeed.FileReference(
+                                path = path,
+                                label = file.name,
+                                detail = relative,
+                                kind = if (artifact) ComposerContextKind.ARTIFACT else ComposerContextKind.FILE,
+                            ),
+                            keywords = relative,
+                        )
+                    }
+                boundedArtifacts(projectDirectory).forEach { file ->
                     val relative = file.relativeTo(projectDirectory).invariantSeparatorsPath
                     val path = "${workingDirectory.trimEnd('/')}/$relative"
-                    val artifact = file.extension.lowercase(Locale.ROOT) in ARTIFACT_EXTENSIONS
                     suggestions += ComposerContextSuggestion(
                         seed = ComposerContextSeed.FileReference(
                             path = path,
                             label = file.name,
                             detail = relative,
-                            kind = if (artifact) ComposerContextKind.ARTIFACT else ComposerContextKind.FILE,
+                            kind = ComposerContextKind.ARTIFACT,
                         ),
-                        keywords = relative,
+                        keywords = "build output package binary $relative",
                     )
                 }
-            boundedArtifacts(projectDirectory).forEach { file ->
-                val relative = file.relativeTo(projectDirectory).invariantSeparatorsPath
-                val path = "${workingDirectory.trimEnd('/')}/$relative"
-                suggestions += ComposerContextSuggestion(
-                    seed = ComposerContextSeed.FileReference(
-                        path = path,
-                        label = file.name,
-                        detail = relative,
-                        kind = ComposerContextKind.ARTIFACT,
-                    ),
-                    keywords = "build output package binary $relative",
-                )
             }
+        }.onFailure {
+            unavailableSources += "Files and artifacts"
         }
         when (val changes = ChangesRepository(appContext).load(workingDirectory)) {
             is ChangesLoadState.Ready -> if (changes.summary.files.isNotEmpty()) {
@@ -224,9 +265,15 @@ internal class ComposerContextRepository(context: Context) {
                     keywords = changes.summary.files.joinToString(" ", transform = ChangedFile::path),
                 )
             }
-            else -> Unit
+            is ChangesLoadState.Unavailable -> if (!changes.detail.contains("not attached to a Git repository", ignoreCase = true)) {
+                unavailableSources += "Changes"
+            }
+            ChangesLoadState.Loading -> Unit
         }
-        return suggestions.distinctBy { it.seed.key }
+        return ComposerContextIndex(
+            suggestions = suggestions.distinctBy { it.seed.key },
+            unavailableSources = unavailableSources,
+        )
     }
 
     private fun boundedArtifacts(projectDirectory: File): List<File> {
@@ -275,7 +322,7 @@ internal object ComposerContextStore {
         )
         is ComposerContextSeed.Changes -> {
             val repository = ChangesRepository(context)
-            val content = buildString {
+            val fullContent = buildString {
                 appendLine("Repository: ${seed.summary.repositoryRoot}")
                 appendLine("Files: ${seed.summary.files.size}; additions: ${seed.summary.additions}; deletions: ${seed.summary.deletions}")
                 seed.summary.files.forEach { file ->
@@ -291,16 +338,29 @@ internal object ComposerContextStore {
                         )
                     }
                 }
-            }.take(MAX_CONTEXT_CHARACTERS)
-            generatedContext(context, sessionId, seed, "current-diff.patch", content)
+            }
+            generatedContext(
+                context = context,
+                sessionId = sessionId,
+                seed = seed,
+                name = "current-diff.patch",
+                content = fullContent.take(MAX_CONTEXT_CHARACTERS),
+                truncated = fullContent.length > MAX_CONTEXT_CHARACTERS,
+            )
         }
-        is ComposerContextSeed.TerminalText -> generatedContext(
-            context = context,
-            sessionId = sessionId,
-            seed = seed,
-            name = "${safeFileStem(seed.terminalName)}-terminal.txt",
-            content = redactTerminalContext(seed.text),
-        )
+        is ComposerContextSeed.TerminalText -> {
+            val content = redactTerminalContext(seed.text)
+            generatedContext(
+                context = context,
+                sessionId = sessionId,
+                seed = seed,
+                name = "${safeFileStem(seed.terminalName)}-terminal.txt",
+                content = content,
+                truncated = seed.text.lineSequence().count() > MAX_TERMINAL_CONTEXT_LINES ||
+                    seed.text.length > MAX_CONTEXT_CHARACTERS,
+                redactionCount = countContextRedactions(content),
+            )
+        }
     }
 
     fun deletePending(context: Context, prepared: PreparedComposerContext) {
@@ -314,6 +374,8 @@ internal object ComposerContextStore {
         seed: ComposerContextSeed,
         name: String,
         content: String,
+        truncated: Boolean = false,
+        redactionCount: Int = 0,
     ): PreparedComposerContext {
         val safeSession = safeFileStem(sessionId)
         val directory = File(context.filesDir, "linux-workspace/.pandora/context/$safeSession")
@@ -330,6 +392,8 @@ internal object ComposerContextStore {
                 sizeBytes = file.length(),
             ),
             generated = true,
+            truncated = truncated,
+            redactionCount = redactionCount,
         )
     }
 
@@ -339,6 +403,9 @@ internal object ComposerContextStore {
 @Composable
 internal fun ComposerContextPalette(
     suggestions: List<ComposerContextSuggestion>,
+    loading: Boolean,
+    unavailableSources: List<String>,
+    onRetry: () -> Unit,
     onSelect: (ComposerContextSuggestion) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -357,9 +424,25 @@ internal fun ComposerContextPalette(
                 Icon(Icons.Rounded.Close, contentDescription = "Close context picker", modifier = Modifier.size(18.dp))
             }
         }
-        if (suggestions.isEmpty()) {
+        if (loading) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Indexing workspace context…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+        } else if (unavailableSources.isNotEmpty()) {
+            ContextIndexWarning(unavailableSources, onRetry)
+        }
+        if (!loading && suggestions.isEmpty()) {
             Text(
-                "No matching files, changes, terminals, or artifacts.",
+                if (unavailableSources.isEmpty()) {
+                    "No matching files, changes, terminals, or artifacts."
+                } else {
+                    "No context is available from the remaining sources."
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
@@ -393,11 +476,16 @@ internal fun ComposerContextPalette(
 }
 
 @Composable
-internal fun PreparedContextChip(context: PreparedComposerContext, onRemove: () -> Unit) {
+internal fun PreparedContextChip(
+    context: PreparedComposerContext,
+    onPreview: () -> Unit,
+    onRemove: () -> Unit,
+) {
     Row(
         Modifier
             .heightIn(min = 48.dp)
             .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClickLabel = "Review ${context.seed.label} context", onClick = onPreview)
             .padding(start = 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -414,6 +502,136 @@ internal fun PreparedContextChip(context: PreparedComposerContext, onRemove: () 
         Box(Modifier.size(48.dp).clickable(onClickLabel = "Remove ${context.seed.label}", onClick = onRemove), contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.Close, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(16.dp))
         }
+    }
+}
+
+@Composable
+private fun ContextIndexWarning(unavailableSources: List<String>, onRetry: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .padding(start = 12.dp, top = 7.dp, bottom = 7.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Some context is unavailable", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                unavailableSources.joinToString(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(Modifier.size(48.dp).clickable(onClickLabel = "Retry context indexing", onClick = onRetry), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+private data class ContextPreviewContent(
+    val text: String?,
+    val sizeBytes: Long?,
+    val previewLimited: Boolean,
+)
+
+@Composable
+internal fun PreparedContextPreviewDialog(context: PreparedComposerContext, onDismiss: () -> Unit) {
+    val appContext = LocalContext.current.applicationContext
+    var preview by remember(context.attachment.containerPath) { mutableStateOf<ContextPreviewContent?>(null) }
+    LaunchedEffect(context.attachment.containerPath) {
+        preview = withContext(Dispatchers.IO) {
+            val resolved = ChatAttachmentStore.resolve(appContext, context.attachment)
+            ContextPreviewContent(
+                text = ChatAttachmentStore.readTextPreview(
+                    appContext,
+                    context.attachment,
+                    maxCharacters = MAX_CONTEXT_PREVIEW_CHARACTERS,
+                ),
+                sizeBytes = resolved?.length() ?: context.attachment.sizeBytes,
+                previewLimited = resolved?.length()?.let { it > MAX_CONTEXT_PREVIEW_CHARACTERS } == true,
+            )
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Review ${context.seed.kind.label.lowercase()} context", fontWeight = FontWeight.SemiBold)
+                Text(
+                    context.seed.label,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        text = {
+            val loaded = preview
+            Column {
+                ContextPreviewFact("Source", context.seed.detail)
+                ContextPreviewFact(
+                    "Captured",
+                    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(context.capturedAtMillis)),
+                )
+                loaded?.let { content ->
+                    val lineCount = content.text?.lineSequence()?.count()
+                    val approximateTokens = content.text?.length?.let { (it + 3) / 4 }
+                    ContextPreviewFact(
+                        "Payload",
+                        buildList {
+                            lineCount?.let { add("$it ${if (it == 1) "line" else "lines"}") }
+                            approximateTokens?.let { add("~${formatContextCount(it)} tokens") }
+                            content.sizeBytes?.let { add(formatContextBytes(it)) }
+                        }.joinToString(" · ").ifBlank { "Attachment metadata" },
+                    )
+                }
+                if (context.redactionCount > 0) {
+                    ContextPreviewFact("Redaction", "${context.redactionCount} secret ${if (context.redactionCount == 1) "value" else "values"} removed")
+                }
+                if (context.truncated || preview?.previewLimited == true) {
+                    ContextPreviewFact("Limit", "Preview or generated context was truncated")
+                }
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 360.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                ) {
+                    when {
+                        preview == null -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        preview?.text != null -> Text(
+                            preview?.text.orEmpty(),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                        )
+                        else -> Text(
+                            "Text preview is unavailable. The file will be attached from ${context.attachment.containerPath}.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+@Composable
+private fun ContextPreviewFact(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(72.dp))
+        Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -436,6 +654,8 @@ internal fun ContextHandoffSheet(
                 "${request.seed.label} · review before sending from the composer",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(18.dp))
             if (currentChatAvailable) {
@@ -482,8 +702,15 @@ private fun HandoffAction(icon: ImageVector, title: String, detail: String, onCl
     ) {
         Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(12.dp))
-        Column {
-            Text(title, color = MaterialTheme.colorScheme.onBackground, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -505,11 +732,26 @@ private fun contextMimeType(name: String): String = when (name.substringAfterLas
     else -> "text/plain"
 }
 
+private fun formatContextCount(value: Int): String = if (value >= 1_000) {
+    String.format(Locale.US, "%.1fk", value / 1_000.0)
+} else {
+    value.toString()
+}
+
+private fun formatContextBytes(value: Long): String = when {
+    value >= 1_048_576 -> String.format(Locale.US, "%.1f MB", value / 1_048_576.0)
+    value >= 1_024 -> String.format(Locale.US, "%.1f KB", value / 1_024.0)
+    else -> "$value B"
+}
+
 private const val MAX_CONTEXT_FILES = 600
 private const val MAX_CONTEXT_ARTIFACTS = 40
 private const val MAX_ARTIFACT_SCAN_ENTRIES = 5_000
 private const val MAX_CONTEXT_SUGGESTIONS = 8
 private const val MAX_CONTEXT_CHARACTERS = 500_000
+private const val MAX_CONTEXT_PREVIEW_CHARACTERS = 500_000
+private const val MAX_TERMINAL_CONTEXT_LINES = 120
+private const val REDACTED_MARKER = "[REDACTED]"
 private val SECRET_ASSIGNMENT_PATTERNS = listOf(
     Regex("(?im)\\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)(\\s*[:=]\\s*)[^\\s]+"),
 )
