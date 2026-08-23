@@ -353,7 +353,7 @@ internal fun ComposerContextPalette(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Add workspace context", color = MaterialTheme.colorScheme.onBackground, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Box(Modifier.size(40.dp).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(48.dp).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.Close, contentDescription = "Close context picker", modifier = Modifier.size(18.dp))
             }
         }
@@ -396,7 +396,7 @@ internal fun ComposerContextPalette(
 internal fun PreparedContextChip(context: PreparedComposerContext, onRemove: () -> Unit) {
     Row(
         Modifier
-            .heightIn(min = 42.dp)
+            .heightIn(min = 48.dp)
             .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp))
             .padding(start = 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -411,7 +411,7 @@ internal fun PreparedContextChip(context: PreparedComposerContext, onRemove: () 
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Box(Modifier.size(38.dp).clickable(onClickLabel = "Remove ${context.seed.label}", onClick = onRemove), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(48.dp).clickable(onClickLabel = "Remove ${context.seed.label}", onClick = onRemove), contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.Close, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(16.dp))
         }
     }

@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -139,7 +140,10 @@ fun SkillsScreen(
                     onCheckedChange = { enabled ->
                         if (enabled && !controlReady) showControlPreflight = true else onEnabledChange(enabled)
                     },
-                    modifier = Modifier.semantics { stateDescription = readiness.label },
+                    modifier = Modifier.semantics {
+                        contentDescription = "ADB phone control"
+                        stateDescription = readiness.label
+                    },
                 )
             }
             Spacer(Modifier.height(18.dp))
@@ -269,7 +273,11 @@ private fun AgentNotificationsSetting(
                 )
             }
             Spacer(Modifier.width(10.dp))
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.semantics { contentDescription = "Agent notifications" },
+            )
         }
         if (blocked) {
             Spacer(Modifier.height(10.dp))
@@ -631,7 +639,7 @@ private fun PluginPage(
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(38.dp).background(MaterialThemeColors.soft, CircleShape).clickable(role = Role.Button, onClick = onBack),
+                Modifier.size(48.dp).background(MaterialThemeColors.soft, CircleShape).clickable(role = Role.Button, onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = MaterialThemeColors.ink, modifier = Modifier.size(20.dp))

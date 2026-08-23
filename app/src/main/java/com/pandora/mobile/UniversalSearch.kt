@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +61,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -385,7 +389,10 @@ internal fun UniversalSearchScreen(
                     BasicTextField(
                         value = query,
                         onValueChange = { query = it },
-                        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester)
+                            .semantics { contentDescription = "Search workspace" },
                         singleLine = true,
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 16.sp),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -394,14 +401,18 @@ internal fun UniversalSearchScreen(
                     )
                 }
                 if (query.isNotEmpty()) {
-                    Box(Modifier.size(40.dp).clickable { query = "" }, contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(48.dp).clickable { query = "" }, contentAlignment = Alignment.Center) {
                         Icon(Icons.Rounded.Close, contentDescription = "Clear search", modifier = Modifier.size(19.dp))
                     }
                 }
             }
         }
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollStateCompat()).padding(horizontal = 18.dp, vertical = 6.dp),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollStateCompat())
+                .selectableGroup()
+                .padding(horizontal = 18.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             UniversalSearchFilter.entries.forEach { candidate ->
@@ -410,7 +421,9 @@ internal fun UniversalSearchScreen(
                     color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.surfaceVariant,
                     contentColor = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurfaceVariant,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.clickable { filter = candidate },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .selectable(selected = selected, role = Role.Tab) { filter = candidate },
                 ) {
                     Text(
                         candidate.label,

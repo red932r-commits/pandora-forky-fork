@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -486,7 +487,7 @@ private fun ProviderChoice(
                 RoundedCornerShape(15.dp),
             )
             .border(1.dp, borderColor, RoundedCornerShape(15.dp))
-            .clickable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

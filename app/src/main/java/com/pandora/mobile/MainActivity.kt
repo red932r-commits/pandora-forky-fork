@@ -46,6 +46,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -124,6 +125,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -1450,10 +1452,10 @@ private fun HomeScreen(
             }
             Spacer(Modifier.height(16.dp))
         } else {
-            Box(Modifier.fillMaxWidth().height(40.dp)) {
+            Box(Modifier.fillMaxWidth().height(48.dp)) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .background(SoftSurface, CircleShape)
                         .clickable(onClick = onSettings)
                         .align(Alignment.CenterStart),
@@ -1474,7 +1476,7 @@ private fun HomeScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .background(SoftSurface, CircleShape)
                             .clickable(onClick = onSearch),
                         contentAlignment = Alignment.Center,
@@ -1483,7 +1485,7 @@ private fun HomeScreen(
                     }
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .background(Ink, CircleShape)
                             .clickable(onClick = onNewTerminal),
                         contentAlignment = Alignment.Center,
@@ -1498,6 +1500,7 @@ private fun HomeScreen(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
+                .selectableGroup()
                 .padding(bottom = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1505,9 +1508,9 @@ private fun HomeScreen(
                 val selected = workspaceFilter == candidate
                 Row(
                     modifier = Modifier
-                        .heightIn(min = 40.dp)
+                        .heightIn(min = 48.dp)
                         .background(if (selected) Ink else SoftSurface, RoundedCornerShape(12.dp))
-                        .clickable { workspaceFilter = candidate }
+                        .selectable(selected = selected, role = Role.Tab) { workspaceFilter = candidate }
                         .padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

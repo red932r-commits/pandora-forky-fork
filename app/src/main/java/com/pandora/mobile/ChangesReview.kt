@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -313,7 +315,10 @@ private fun ChangesList(
             Spacer(Modifier.height(16.dp))
             AddChangesToChatAction(onClick = onAddToChat)
             Spacer(Modifier.height(16.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 ChangeFilter("All", filter == null) { filter = null }
                 ChangeFilter("Modified", filter == ChangeKind.MODIFIED) { filter = ChangeKind.MODIFIED }
                 ChangeFilter("Added", filter == ChangeKind.ADDED) { filter = ChangeKind.ADDED }
@@ -350,10 +355,10 @@ private fun ChangeMetric(label: String, icon: androidx.compose.ui.graphics.vecto
 private fun ChangeFilter(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = 48.dp)
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(12.dp))
             .border(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-            .clickable(role = Role.Tab, onClick = onClick)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
             .padding(horizontal = 15.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
