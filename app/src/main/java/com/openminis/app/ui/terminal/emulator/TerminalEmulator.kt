@@ -101,6 +101,22 @@ class TerminalEmulator(cols: Int = 80, rows: Int = 24) {
         return result
     }
 
+    /** Plain-text tail for explicit chat handoffs; never includes more than [maxLines]. */
+    @Synchronized
+    fun recentText(maxLines: Int = 40): String {
+        if (maxLines <= 0) return ""
+        val buffer = activeBuffer
+        val lines = buildList {
+            buffer.scrollback.forEach(::add)
+            buffer.grid.forEach(::add)
+        }.takeLast(maxLines)
+        return lines.joinToString("\n") { row ->
+            buildString {
+                row.forEach { cell -> if (cell.char != 0) appendCodePoint(cell.char) }
+            }.trimEnd()
+        }.trim()
+    }
+
     @Synchronized
     fun resize(newCols: Int, newRows: Int) {
         if (newCols <= 0 || newRows <= 0) return

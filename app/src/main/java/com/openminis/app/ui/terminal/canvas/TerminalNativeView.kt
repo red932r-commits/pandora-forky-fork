@@ -53,6 +53,7 @@ fun TerminalNativeViewCompose(
     fontSizeSp: Float = 13f,
     onResize: (cols: Int, rows: Int) -> Unit,
     onTap: () -> Unit = {},
+    onAddToChat: (String) -> Unit = {},
 ) {
     val typeface = remember { Typeface.MONOSPACE }
     AndroidView(
@@ -60,12 +61,12 @@ fun TerminalNativeViewCompose(
         factory = { ctx ->
             TerminalNativeView(ctx, typeface).apply {
                 setFontSizeSp(fontSizeSp)
-                attachEmulator(emulator, onResize, onTap)
+                attachEmulator(emulator, onResize, onTap, onAddToChat)
             }
         },
         update = { view ->
             view.setFontSizeSp(fontSizeSp)
-            view.attachEmulator(emulator, onResize, onTap)
+            view.attachEmulator(emulator, onResize, onTap, onAddToChat)
         },
     )
 }
@@ -78,6 +79,7 @@ class TerminalNativeView @JvmOverloads constructor(
     private var emulator: TerminalEmulator? = null
     private var onResize: (cols: Int, rows: Int) -> Unit = { _, _ -> }
     private var onTap: () -> Unit = {}
+    private var onAddToChat: (String) -> Unit = {}
 
     private val basePaint = Paint().apply {
         this.typeface = this@TerminalNativeView.typeface
@@ -116,10 +118,12 @@ class TerminalNativeView @JvmOverloads constructor(
         emulator: TerminalEmulator,
         onResize: (Int, Int) -> Unit,
         onTap: () -> Unit,
+        onAddToChat: (String) -> Unit,
     ) {
         this.emulator = emulator
         this.onResize = onResize
         this.onTap = onTap
+        this.onAddToChat = onAddToChat
         invalidate()
     }
 
@@ -268,7 +272,9 @@ class TerminalNativeView @JvmOverloads constructor(
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
                 menu.add(Menu.NONE, MENU_COPY, 0, android.R.string.copy)
                     .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-                menu.add(Menu.NONE, MENU_SELECT_ALL, 1, android.R.string.selectAll)
+                menu.add(Menu.NONE, MENU_ADD_TO_CHAT, 1, "Add to chat")
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                menu.add(Menu.NONE, MENU_SELECT_ALL, 2, android.R.string.selectAll)
                     .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
                 return true
             }
@@ -292,6 +298,16 @@ class TerminalNativeView @JvmOverloads constructor(
                         em.setSelectionRect(0, 0, cols - 1, rows - 1)
                         lastSelEndX = (cols * cellWidth).toInt()
                         lastSelEndY = (rows * cellHeight).toInt()
+                        true
+                    }
+                    MENU_ADD_TO_CHAT -> {
+                        val sel = em.selectionRect()
+                        if (sel != null) {
+                            em.getSelectedText(sel[0], sel[1], sel[2], sel[3])
+                                .takeIf(String::isNotBlank)
+                                ?.let(onAddToChat)
+                        }
+                        mode.finish()
                         true
                     }
                     else -> false
@@ -408,6 +424,7 @@ class TerminalNativeView @JvmOverloads constructor(
     companion object {
         private const val MENU_COPY = 1
         private const val MENU_SELECT_ALL = 2
+        private const val MENU_ADD_TO_CHAT = 3
     }
 }
 

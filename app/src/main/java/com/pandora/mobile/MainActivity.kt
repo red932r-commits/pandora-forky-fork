@@ -65,6 +65,7 @@ import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
@@ -220,6 +221,8 @@ private fun PandoraApp() {
     var selectedChatSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedReviewDirectory by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingChatDraft by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingComposerContexts by remember { mutableStateOf<List<ComposerContextSeed>>(emptyList()) }
+    var contextHandoff by remember { mutableStateOf<ContextHandoffRequest?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
@@ -304,6 +307,9 @@ private fun PandoraApp() {
                             },
                             initialDraft = pendingChatDraft,
                             onInitialDraftConsumed = { pendingChatDraft = null },
+                            initialContextSeeds = pendingComposerContexts,
+                            onInitialContextsConsumed = { pendingComposerContexts = emptyList() },
+                            availableTerminals = sessions,
                         )
                     }
                 }
@@ -376,7 +382,10 @@ private fun PandoraApp() {
                                     screen = Screen.Chat
                                 }
                                 is UniversalSearchTarget.File -> {
-                                    pendingChatDraft = "Review ${target.path}"
+                                    pendingChatDraft = "Review this file and explain what matters."
+                                    pendingComposerContexts = listOf(
+                                        ComposerContextSeed.FileReference(target.path),
+                                    )
                                     val current = chatManager.find(selectedChatSessionId)
                                     if (current == null || current.workingDirectory != target.projectPath) {
                                         selectedChatSessionId = chatManager.create(cwd = target.projectPath).id
@@ -425,6 +434,15 @@ private fun PandoraApp() {
                                     selectedReviewDirectory = null
                                     screen = if (selectedChatSessionId == null) Screen.Home else Screen.Chat
                                 },
+                                onAddToChat = { summary ->
+                                    pendingChatDraft = "Review these changes and call out risks or regressions."
+                                    pendingComposerContexts = listOf(ComposerContextSeed.Changes(summary))
+                                    if (chatManager.find(selectedChatSessionId) == null) {
+                                        selectedChatSessionId = chatManager.create(cwd = directory).id
+                                    }
+                                    selectedReviewDirectory = null
+                                    screen = Screen.Chat
+                                },
                             )
                         }
                     }
@@ -447,6 +465,17 @@ private fun PandoraApp() {
                                 onRestart = {
                                     val restarted = sessionManager.restart(session.id)
                                     if (restarted != null) selectedSessionId = restarted.id
+                                },
+                                onAddSelectionToChat = { text ->
+                                    contextHandoff = ContextHandoffRequest(
+                                        seed = ComposerContextSeed.TerminalText(
+                                            terminalName = session.title,
+                                            text = text,
+                                            detail = "${text.lineSequence().count()} selected lines",
+                                        ),
+                                        suggestedWorkingDirectory = chatManager.find(selectedChatSessionId)?.workingDirectory,
+                                        copyText = text,
+                                    )
                                 },
                             )
                         }
@@ -526,6 +555,26 @@ private fun PandoraApp() {
                     )
                     Screen.Archive -> ArchiveScreen(onBack = { screen = archiveReturnScreen })
                     }
+                }
+                contextHandoff?.let { request ->
+                    ContextHandoffSheet(
+                        request = request,
+                        currentChatAvailable = chatManager.find(selectedChatSessionId) != null,
+                        onDismiss = { contextHandoff = null },
+                        onAddToCurrentChat = {
+                            pendingComposerContexts = (pendingComposerContexts + request.seed).distinctBy(ComposerContextSeed::key)
+                            pendingChatDraft = pendingChatDraft ?: "Explain this terminal output and suggest the next fix."
+                            contextHandoff = null
+                            screen = Screen.Chat
+                        },
+                        onStartNewChat = {
+                            pendingComposerContexts = listOf(request.seed)
+                            pendingChatDraft = "Explain this terminal output and suggest the next fix."
+                            selectedChatSessionId = chatManager.create(cwd = request.suggestedWorkingDirectory).id
+                            contextHandoff = null
+                            screen = Screen.Chat
+                        },
+                    )
                 }
             }
         }
@@ -3281,6 +3330,9 @@ private fun ChatScreen(
     onReviewChanges: () -> Unit,
     initialDraft: String? = null,
     onInitialDraftConsumed: () -> Unit = {},
+    initialContextSeeds: List<ComposerContextSeed> = emptyList(),
+    onInitialContextsConsumed: () -> Unit = {},
+    availableTerminals: List<ManagedTerminalSession> = emptyList(),
     showBackButton: Boolean = true,
 ) {
     BackHandler(onBack = onBack)
@@ -3297,7 +3349,11 @@ private fun ChatScreen(
     var dictationPrefix by remember { mutableStateOf("") }
     var missingSpeechKind by remember { mutableStateOf<SpeechModelKind?>(null) }
     val pendingAttachments = remember { mutableStateListOf<ChatAttachment>() }
+    val pendingContexts = remember { mutableStateListOf<PreparedComposerContext>() }
     var attachmentMenuOpen by remember { mutableStateOf(false) }
+    var contextPickerForced by remember { mutableStateOf(false) }
+    var contextSuggestions by remember(session.workingDirectory) { mutableStateOf<List<ComposerContextSuggestion>>(emptyList()) }
+    var preparingContext by remember { mutableStateOf(false) }
     var importingAttachment by remember { mutableStateOf(false) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     var previewAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
@@ -3314,6 +3370,7 @@ private fun ChatScreen(
     val customProvider = remember { ModelProviderSettings.savedCustomProvider(context) }
     var responseSettingsOpen by remember { mutableStateOf(false) }
     val changesRepository = remember(context) { ChangesRepository(context) }
+    val contextRepository = remember(context) { ComposerContextRepository(context) }
     var changeSummary by remember(session.id) { mutableStateOf<ChangeSummary?>(null) }
     var pendingVoiceModePermission by remember { mutableStateOf(false) }
     var lastAutoReadMessageId by remember(session.id) {
@@ -3342,6 +3399,27 @@ private fun ChatScreen(
             onInitialDraftConsumed()
         }
     }
+    LaunchedEffect(session.workingDirectory) {
+        contextSuggestions = withContext(Dispatchers.IO) {
+            runCatching { contextRepository.load(session.workingDirectory) }.getOrDefault(emptyList())
+        }
+    }
+    LaunchedEffect(initialContextSeeds) {
+        if (initialContextSeeds.isEmpty()) return@LaunchedEffect
+        preparingContext = true
+        val result = withContext(Dispatchers.IO) {
+            runCatching { initialContextSeeds.map { ComposerContextStore.prepare(context, session.id, it) } }
+        }
+        preparingContext = false
+        result.onSuccess { prepared ->
+            pendingContexts.removeAll { existing -> prepared.any { it.seed.key == existing.seed.key } }
+            pendingContexts.addAll(prepared)
+            onInitialContextsConsumed()
+        }.onFailure {
+            attachmentError = it.message ?: "Could not prepare workspace context"
+            onInitialContextsConsumed()
+        }
+    }
     fun submit() {
         if (
             dictation is DictationState.Loading ||
@@ -3357,7 +3435,7 @@ private fun ChatScreen(
                 return
             }
             command as SlashCommandParseResult.Command
-            if (pendingAttachments.isNotEmpty()) {
+            if (pendingAttachments.isNotEmpty() || pendingContexts.isNotEmpty()) {
                 session.showCommandError("Slash commands cannot be sent with attachments. Remove them and try again.")
                 return
             }
@@ -3393,10 +3471,12 @@ private fun ChatScreen(
             dictationPrefix = ""
             return
         }
-        if (session.send(draft, pendingAttachments.toList())) {
+        val outgoingAttachments = pendingAttachments.toList() + pendingContexts.map(PreparedComposerContext::attachment)
+        if (session.send(draft, outgoingAttachments)) {
             draft = ""
             dictationPrefix = ""
             pendingAttachments.clear()
+            pendingContexts.clear()
         }
     }
     fun importAttachment(uri: android.net.Uri?) {
@@ -3521,6 +3601,7 @@ private fun ChatScreen(
     DisposableEffect(session.id) {
         onDispose {
             pendingAttachments.forEach { ChatAttachmentStore.deletePending(context, it) }
+            pendingContexts.forEach { ComposerContextStore.deletePending(context, it) }
             if (!application.voiceMode.state.value.active) {
                 speech.cancelDictation()
                 speech.stopSpeaking()
@@ -3667,13 +3748,74 @@ private fun ChatScreen(
                 .padding(horizontal = 6.dp, vertical = 6.dp),
         ) {
             val commandSuggestions = slashCommandSuggestions(draft)
-            if (commandSuggestions.isNotEmpty()) {
+            val mentionQuery = contextMentionQuery(draft)
+            val terminalContextSuggestions = availableTerminals.mapNotNull { terminal ->
+                terminal.emulator.recentText(40).takeIf(String::isNotBlank)?.let { output ->
+                    ComposerContextSuggestion(
+                        seed = ComposerContextSeed.TerminalText(
+                            terminalName = terminal.title,
+                            text = output,
+                            detail = "Latest ${output.lineSequence().count()} lines",
+                        ),
+                        keywords = "shell output ${terminal.persistentSessionName}",
+                    )
+                }
+            }
+            val shownContextSuggestions = if (contextPickerForced || mentionQuery != null) {
+                filterContextSuggestions(contextSuggestions + terminalContextSuggestions, mentionQuery.orEmpty())
+            } else {
+                emptyList()
+            }
+            if (contextPickerForced || mentionQuery != null) {
+                ComposerContextPalette(
+                    suggestions = shownContextSuggestions,
+                    onSelect = { suggestion ->
+                        contextPickerForced = false
+                        draft = removeContextMention(draft)
+                        if (pendingContexts.none { it.seed.key == suggestion.seed.key }) {
+                            preparingContext = true
+                            chatScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { ComposerContextStore.prepare(context, session.id, suggestion.seed) }
+                                }
+                                preparingContext = false
+                                result.onSuccess(pendingContexts::add).onFailure {
+                                    attachmentError = it.message ?: "Could not prepare workspace context"
+                                }
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        contextPickerForced = false
+                        if (mentionQuery != null) draft = removeContextMention(draft)
+                    },
+                )
+            } else if (commandSuggestions.isNotEmpty()) {
                 SlashCommandPalette(
                     commands = commandSuggestions,
                     onSelect = { command ->
                         draft = if (command.id == SlashCommandId.MODEL) "/model " else command.usage
                     },
                 )
+            }
+            if (pendingContexts.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 5.dp, end = 5.dp, top = 3.dp, bottom = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    pendingContexts.forEach { prepared ->
+                        PreparedContextChip(
+                            context = prepared,
+                            onRemove = {
+                                pendingContexts.remove(prepared)
+                                ComposerContextStore.deletePending(context, prepared)
+                            },
+                        )
+                    }
+                }
             }
             if (pendingAttachments.isNotEmpty()) {
                 Row(
@@ -3718,6 +3860,10 @@ private fun ChatScreen(
                         onFile = {
                             attachmentMenuOpen = false
                             filePicker.launch(arrayOf("*/*"))
+                        },
+                        onContext = {
+                            attachmentMenuOpen = false
+                            contextPickerForced = true
                         },
                     )
                 }
@@ -3778,8 +3924,8 @@ private fun ChatScreen(
                     }
                 }
                 val running = state is CodexChatState.Running
-                val hasComposerContent = draft.isNotBlank() || pendingAttachments.isNotEmpty()
-                val canSend = ready && hasComposerContent
+                val hasComposerContent = draft.isNotBlank() || pendingAttachments.isNotEmpty() || pendingContexts.isNotEmpty()
+                val canSend = ready && hasComposerContent && !preparingContext
                 val actionEnabled = when {
                     running -> !interrupting
                     hasComposerContent -> canSend
@@ -4415,8 +4561,19 @@ private fun ComposerAddMenu(
     onDismiss: () -> Unit,
     onPhoto: () -> Unit,
     onFile: () -> Unit,
+    onContext: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = {
+                Column {
+                    Text("Workspace context", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Add a file, diff, terminal, or artifact", color = Muted, fontSize = 11.sp)
+                }
+            },
+            leadingIcon = { Icon(Icons.Rounded.Code, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp)) },
+            onClick = onContext,
+        )
         DropdownMenuItem(
             text = {
                 Column {
@@ -4655,11 +4812,13 @@ private fun ContainerScreen(
     onBack: () -> Unit,
     onStop: () -> Unit,
     onRestart: () -> Unit,
+    onAddSelectionToChat: (String) -> Unit = {},
 ) {
     TerminalScreen(
         session = session,
         onBack = onBack,
         onStop = onStop,
         onRestart = onRestart,
+        onAddSelectionToChat = onAddSelectionToChat,
     )
 }

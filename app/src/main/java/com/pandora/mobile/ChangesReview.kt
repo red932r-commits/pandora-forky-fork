@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
@@ -217,6 +218,7 @@ fun parseUnifiedDiff(diff: String): List<DiffLine> {
 fun ChangesReviewScreen(
     workingDirectory: String,
     onBack: () -> Unit,
+    onAddToChat: (ChangeSummary) -> Unit = {},
 ) {
     BackHandler(onBack = onBack)
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -237,6 +239,7 @@ fun ChangesReviewScreen(
             file = file,
             onSelectFile = { selectedFile = it },
             onBack = { selectedFile = null },
+            onAddToChat = { onAddToChat(ready.summary) },
         )
         return
     }
@@ -255,6 +258,7 @@ fun ChangesReviewScreen(
                 summary = current.summary,
                 onOpenFile = { selectedFile = it },
                 onRefresh = { loadGeneration++ },
+                onAddToChat = { onAddToChat(current.summary) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -291,6 +295,7 @@ private fun ChangesList(
     summary: ChangeSummary,
     onOpenFile: (ChangedFile) -> Unit,
     onRefresh: () -> Unit,
+    onAddToChat: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var filter by remember { mutableStateOf<ChangeKind?>(null) }
@@ -305,6 +310,8 @@ private fun ChangesList(
                 ChangeMetric("+${summary.additions}", Icons.Rounded.Add, MaterialTheme.colorScheme.secondary)
                 ChangeMetric("−${summary.deletions}", Icons.Rounded.Remove, MaterialTheme.colorScheme.error)
             }
+            Spacer(Modifier.height(16.dp))
+            AddChangesToChatAction(onClick = onAddToChat)
             Spacer(Modifier.height(16.dp))
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ChangeFilter("All", filter == null) { filter = null }
@@ -443,6 +450,7 @@ private fun DiffViewer(
     file: ChangedFile,
     onSelectFile: (ChangedFile) -> Unit,
     onBack: () -> Unit,
+    onAddToChat: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     var diff by remember(file.path) { mutableStateOf<List<DiffLine>?>(null) }
@@ -489,7 +497,37 @@ private fun DiffViewer(
                 forward = true,
                 modifier = Modifier.weight(1f),
             ) { onSelectFile(summary.files[index + 1]) }
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(13.dp))
+                    .clickable(role = Role.Button, onClickLabel = "Add diff to chat", onClick = onAddToChat),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = "Add diff to chat", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
+            }
         }
+    }
+}
+
+@Composable
+private fun AddChangesToChatAction(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 50.dp)
+            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp))
+            .clickable(role = Role.Button, onClickLabel = "Add current diff to chat", onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.ChatBubbleOutline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Add diff to chat", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text("Review it in the composer before sending", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        }
+        Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
     }
 }
 

@@ -58,6 +58,7 @@ fun TerminalScreen(
     onBack: () -> Unit,
     onStop: () -> Unit,
     onRestart: () -> Unit,
+    onAddSelectionToChat: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val emulator = session.emulator
@@ -112,6 +113,7 @@ fun TerminalScreen(
                         session.resize(columns, rows)
                     },
                     onTap = { if (!readOnly) input.requestFocus() },
+                    onAddToChat = onAddSelectionToChat,
                 )
                 if (!readOnly) {
                     TerminalInputView(
