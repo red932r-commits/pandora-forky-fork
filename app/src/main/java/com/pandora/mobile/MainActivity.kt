@@ -81,6 +81,7 @@ import androidx.compose.material.icons.rounded.InstallMobile
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
@@ -182,7 +183,7 @@ private val AccentSurface: Color @Composable get() = MaterialTheme.colorScheme.p
 private val Terminal = Color(0xFF111210)
 private val TerminalText = Color(0xFFD8E4D1)
 
-private enum class Screen { Onboarding, Home, Chat, Changes, Container, Settings, Voice, CustomProvider, Skills, AdbSetup, Archive }
+private enum class Screen { Onboarding, Home, Search, Chat, Changes, Container, Settings, Voice, CustomProvider, Skills, AdbSetup, Archive }
 
 private sealed interface OnboardingState {
     data object Welcome : OnboardingState
@@ -214,9 +215,11 @@ private fun PandoraApp() {
         )
     }
     var settingsReturnScreen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var archiveReturnScreen by rememberSaveable { mutableStateOf(Screen.Settings) }
     var selectedSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedChatSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedReviewDirectory by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingChatDraft by rememberSaveable { mutableStateOf<String?>(null) }
     var themePreference by remember { mutableStateOf(AppSettings.theme(context)) }
     PandoraTheme(themePreference) {
         Surface(color = Paper, modifier = Modifier.fillMaxSize()) {
@@ -265,6 +268,7 @@ private fun PandoraApp() {
                             selectedSessionId = sessionManager.attach(name).id
                             screen = Screen.Container
                         },
+                        onSearch = { screen = Screen.Search },
                         onSettings = {
                             settingsReturnScreen = screen
                             screen = Screen.Settings
@@ -298,6 +302,8 @@ private fun PandoraApp() {
                                 selectedReviewDirectory = chat.workingDirectory
                                 screen = Screen.Changes
                             },
+                            initialDraft = pendingChatDraft,
+                            onInitialDraftConsumed = { pendingChatDraft = null },
                         )
                     }
                 }
@@ -357,6 +363,48 @@ private fun PandoraApp() {
                     } else {
                         homePane(Modifier.fillMaxSize(), false)
                     }
+                    Screen.Search -> UniversalSearchScreen(
+                        onBack = { screen = Screen.Home },
+                        onSelect = { target ->
+                            when (target) {
+                                is UniversalSearchTarget.Project -> {
+                                    selectedChatSessionId = chatManager.create(cwd = target.path).id
+                                    screen = Screen.Chat
+                                }
+                                is UniversalSearchTarget.Chat -> {
+                                    selectedChatSessionId = chatManager.create(target.threadId, target.cwd).id
+                                    screen = Screen.Chat
+                                }
+                                is UniversalSearchTarget.File -> {
+                                    pendingChatDraft = "Review ${target.path}"
+                                    val current = chatManager.find(selectedChatSessionId)
+                                    if (current == null || current.workingDirectory != target.projectPath) {
+                                        selectedChatSessionId = chatManager.create(cwd = target.projectPath).id
+                                    }
+                                    screen = Screen.Chat
+                                }
+                                is UniversalSearchTarget.Command -> {
+                                    pendingChatDraft = target.usage
+                                    if (chatManager.find(selectedChatSessionId) == null) {
+                                        selectedChatSessionId = chatManager.create(cwd = null).id
+                                    }
+                                    screen = Screen.Chat
+                                }
+                                is UniversalSearchTarget.Terminal -> {
+                                    selectedSessionId = sessionManager.attach(target.persistentName).id
+                                    screen = Screen.Container
+                                }
+                                is UniversalSearchTarget.Setting -> {
+                                    settingsReturnScreen = Screen.Search
+                                    screen = Screen.Settings
+                                }
+                                UniversalSearchTarget.Archive -> {
+                                    archiveReturnScreen = Screen.Search
+                                    screen = Screen.Archive
+                                }
+                            }
+                        },
+                    )
                     Screen.Chat -> {
                         if (expandedWorkspace) {
                             twoPaneWorkspace()
@@ -416,7 +464,10 @@ private fun PandoraApp() {
                             themePreference = it
                         },
                         onBack = { screen = settingsReturnScreen },
-                        onArchive = { screen = Screen.Archive },
+                        onArchive = {
+                            archiveReturnScreen = Screen.Settings
+                            screen = Screen.Archive
+                        },
                         onPlugins = { screen = Screen.Skills },
                         onVoice = { screen = Screen.Voice },
                         onCodexLogin = {
@@ -473,7 +524,7 @@ private fun PandoraApp() {
                         onBeginPairing = context.adbPlugin::beginPairing,
                         onRetry = context.adbPlugin::retry,
                     )
-                    Screen.Archive -> ArchiveScreen(onBack = { screen = Screen.Settings })
+                    Screen.Archive -> ArchiveScreen(onBack = { screen = archiveReturnScreen })
                     }
                 }
             }
@@ -1169,6 +1220,7 @@ private fun HomeScreen(
     onRenamePersistentTerminal: (String, String) -> Unit,
     onDeletePersistentTerminal: (String) -> Unit,
     onOpenPersistentTerminal: (String) -> Unit,
+    onSearch: () -> Unit,
     onSettings: () -> Unit,
     onCodexLogin: () -> Unit,
 ) {
@@ -1206,6 +1258,7 @@ private fun HomeScreen(
     var emptyProjectsPromptDismissed by remember(context) {
         mutableStateOf(AppSettings.emptyProjectsPromptDismissed(context))
     }
+    var workspaceFilter by rememberSaveable { mutableStateOf(HomeWorkspaceFilter.ALL) }
     var collapsedProjects by remember(context) { mutableStateOf(AppSettings.collapsedProjectPaths(context)) }
     val actionScope = rememberCoroutineScope()
     LaunchedEffect(limitRefresh, sessions.size) {
@@ -1250,6 +1303,25 @@ private fun HomeScreen(
             }
         }.sortedByDescending { it.updatedAtMillis }
     }
+    val liveChatStates = chatSessions.associate { chat -> chat.id to chat.state.collectAsState().value }
+    val liveTerminalStates = sessions.associate { terminal -> terminal.id to terminal.state.collectAsState().value }
+    fun matchesWorkspaceFilter(entry: WorkspaceEntry): Boolean = when (workspaceFilter) {
+        HomeWorkspaceFilter.ALL -> true
+        HomeWorkspaceFilter.WORKING -> when (entry) {
+            is WorkspaceEntry.Chat -> liveChatStates[entry.chat.id] is CodexChatState.Running
+            is WorkspaceEntry.TerminalSession -> liveTerminalStates[entry.session.id] in setOf(
+                PtyTerminalSession.State.PREPARING,
+                PtyTerminalSession.State.RUNNING,
+            )
+            is WorkspaceEntry.PersistentTerminal -> true
+        }
+        HomeWorkspaceFilter.READY -> entry is WorkspaceEntry.Chat && liveChatStates[entry.chat.id] is CodexChatState.Ready
+        HomeWorkspaceFilter.FAILED -> when (entry) {
+            is WorkspaceEntry.Chat -> liveChatStates[entry.chat.id] is CodexChatState.Failed
+            is WorkspaceEntry.TerminalSession -> liveTerminalStates[entry.session.id] == PtyTerminalSession.State.FAILED
+            is WorkspaceEntry.PersistentTerminal -> false
+        }
+    }
     val projects = remember(activeChats, registeredProjects, archive) {
         val visibleRegistered = registeredProjects.filterNot { it.path in archive.projectPaths }
         val registeredByPath = visibleRegistered.associateBy { it.path }
@@ -1274,9 +1346,15 @@ private fun HomeScreen(
             activeChats.filter { it.cwd == path }.map(WorkspaceEntry::Chat)
         }
     }
-    val otherEntries = remember(entries, projectPaths) {
-        entries.filterNot { entry -> entry is WorkspaceEntry.Chat && entry.chat.cwd in projectPaths }
+    val visibleProjectChats = projectChats.mapValues { (_, entries) -> entries.filter(::matchesWorkspaceFilter) }
+    val visibleProjects = if (workspaceFilter == HomeWorkspaceFilter.ALL) {
+        projects
+    } else {
+        projects.filter { visibleProjectChats[it.path].orEmpty().isNotEmpty() }
     }
+    val otherEntries = entries
+        .filterNot { entry -> entry is WorkspaceEntry.Chat && entry.chat.cwd in projectPaths }
+        .filter(::matchesWorkspaceFilter)
 
     Column(
         modifier = modifier
@@ -1295,6 +1373,9 @@ private fun HomeScreen(
                 )
                 IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Muted, modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = onSearch, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Rounded.Search, contentDescription = "Search workspace", tint = Muted, modifier = Modifier.size(20.dp))
                 }
                 IconButton(onClick = onNewTerminal, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Ink, modifier = Modifier.size(20.dp))
@@ -1320,30 +1401,82 @@ private fun HomeScreen(
             }
             Spacer(Modifier.height(16.dp))
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.fillMaxWidth().height(40.dp)) {
                 Box(
                     modifier = Modifier
                         .size(40.dp)
                         .background(SoftSurface, CircleShape)
-                        .clickable(onClick = onSettings),
+                        .clickable(onClick = onSettings)
+                        .align(Alignment.CenterStart),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = Ink, modifier = Modifier.size(20.dp))
                 }
-                Spacer(Modifier.weight(1f))
-                Text("Pandora", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.weight(1f))
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(Ink, CircleShape)
-                        .clickable(onClick = onNewTerminal),
-                    contentAlignment = Alignment.Center,
+                Text(
+                    "Pandora",
+                    color = Ink,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                Row(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Paper, modifier = Modifier.size(20.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(SoftSurface, CircleShape)
+                            .clickable(onClick = onSearch),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.Search, contentDescription = "Search workspace", tint = Ink, modifier = Modifier.size(20.dp))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(Ink, CircleShape)
+                            .clickable(onClick = onNewTerminal),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.Terminal, contentDescription = "New terminal", tint = Paper, modifier = Modifier.size(20.dp))
+                    }
                 }
             }
             Spacer(Modifier.height(18.dp))
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            HomeWorkspaceFilter.entries.forEach { candidate ->
+                val selected = workspaceFilter == candidate
+                Row(
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .background(if (selected) Ink else SoftSurface, RoundedCornerShape(12.dp))
+                        .clickable { workspaceFilter = candidate }
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(7.dp).background(
+                            when (candidate) {
+                                HomeWorkspaceFilter.ALL -> if (selected) MaterialTheme.colorScheme.primaryContainer else Accent
+                                HomeWorkspaceFilter.WORKING -> Color(0xFF55A76A)
+                                HomeWorkspaceFilter.READY -> Color(0xFF7667E8)
+                                HomeWorkspaceFilter.FAILED -> MaterialTheme.colorScheme.error
+                            },
+                            CircleShape,
+                        ),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(candidate.label, color = if (selected) Paper else Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
+            }
         }
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1367,7 +1500,7 @@ private fun HomeScreen(
                     onAction = { addProjectStep = AddProjectStep.Menu },
                 )
             }
-            if (projects.isEmpty() && (catalogLoading || !emptyProjectsPromptDismissed)) {
+            if (visibleProjects.isEmpty() && workspaceFilter == HomeWorkspaceFilter.ALL && (catalogLoading || !emptyProjectsPromptDismissed)) {
                 item("projects-empty") {
                     EmptyProjectsRow(
                         loading = catalogLoading,
@@ -1380,9 +1513,9 @@ private fun HomeScreen(
                     )
                 }
             }
-            projects.forEach { project ->
+            visibleProjects.forEach { project ->
                 val path = project.path
-                val projectEntries = projectChats[path].orEmpty()
+                val projectEntries = visibleProjectChats[path].orEmpty()
                 val expanded = path !in collapsedProjects
                 item("project:$path") {
                     ProjectHeader(
@@ -1468,6 +1601,18 @@ private fun HomeScreen(
                             if (entry is WorkspaceEntry.Chat) deleteChat = entry.chat else removeEntry = entry
                         },
                     )
+                }
+            }
+            if (visibleProjects.isEmpty() && otherEntries.isEmpty() && workspaceFilter != HomeWorkspaceFilter.ALL) {
+                item("filter-empty") {
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = 36.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("No ${workspaceFilter.label.lowercase()} work", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(5.dp))
+                        Text("Choose All to see the complete workspace.", color = Muted, fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -1755,6 +1900,13 @@ private fun HomeScreen(
 }
 
 private enum class AddProjectStep { Menu, ChooseFolder, CreateFolder, CloneRepository }
+
+private enum class HomeWorkspaceFilter(val label: String) {
+    ALL("All"),
+    WORKING("Working"),
+    READY("Ready"),
+    FAILED("Failed"),
+}
 
 @Composable
 private fun WorkspaceSectionHeading(
@@ -3127,6 +3279,8 @@ private fun ChatScreen(
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
     onReviewChanges: () -> Unit,
+    initialDraft: String? = null,
+    onInitialDraftConsumed: () -> Unit = {},
     showBackButton: Boolean = true,
 ) {
     BackHandler(onBack = onBack)
@@ -3139,7 +3293,7 @@ private fun ChatScreen(
     val dictationDiagnostics by speech.diagnostics.collectAsState()
     val playback by speech.playback.collectAsState()
     val voiceModeState by voiceMode.state.collectAsState()
-    var draft by remember { mutableStateOf("") }
+    var draft by rememberSaveable(session.id) { mutableStateOf("") }
     var dictationPrefix by remember { mutableStateOf("") }
     var missingSpeechKind by remember { mutableStateOf<SpeechModelKind?>(null) }
     val pendingAttachments = remember { mutableStateListOf<ChatAttachment>() }
@@ -3181,6 +3335,12 @@ private fun ChatScreen(
         is CodexChatState.Running -> "$responseSummary · Working…"
         is CodexChatState.Failed -> "Connection failed"
         CodexChatState.Closed -> "Closed"
+    }
+    LaunchedEffect(initialDraft) {
+        initialDraft?.let {
+            draft = it
+            onInitialDraftConsumed()
+        }
     }
     fun submit() {
         if (
