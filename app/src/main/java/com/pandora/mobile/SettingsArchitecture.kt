@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -368,16 +369,23 @@ private fun AccountAndModelsSettings(
     )
 
     Spacer(Modifier.height(26.dp))
-    SettingsGroupTitle("Model provider · remote inference")
-    ProviderChoice(
-        title = "Codex OSS",
-        summary = customProvider?.let {
-            "Remote via ${customProviderHost ?: "saved provider"}\n${it.defaultModel.substringAfterLast('/')}"
-        } ?: "OpenAI-compatible endpoint\nConfigure a remote model",
-        selected = providerMode == ModelProviderMode.CUSTOM,
+    SettingsGroupTitle("Model provider")
+    Text(
+        "Choose which provider new chats use. Switching preserves both saved profiles.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+    )
+    Spacer(Modifier.height(14.dp))
+    ProviderSegmentedControl(
+        selected = providerMode,
         enabled = codexInstalled,
-        icon = Icons.Rounded.Hub,
-        onClick = {
+        onSelectCodex = {
+            if (providerMode != ModelProviderMode.CODEX) {
+                pendingProviderMode = ModelProviderMode.CODEX
+            }
+        },
+        onSelectCustom = {
             if (customConfigured) {
                 if (providerMode != ModelProviderMode.CUSTOM) {
                     pendingProviderMode = ModelProviderMode.CUSTOM
@@ -387,59 +395,39 @@ private fun AccountAndModelsSettings(
             }
         },
     )
-    Spacer(Modifier.height(10.dp))
-    ProviderChoice(
-        title = "Codex",
-        summary = "Hosted by OpenAI\nUses your ChatGPT account",
-        selected = providerMode == ModelProviderMode.CODEX,
-        enabled = codexInstalled,
-        icon = null,
-        customIcon = {
-            Image(
-                painter = painterResource(R.drawable.codex_mark),
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
-        },
-        onClick = {
-            if (providerMode != ModelProviderMode.CODEX) {
-                pendingProviderMode = ModelProviderMode.CODEX
-            }
-        },
-    )
-
-    Spacer(Modifier.height(26.dp))
-    SettingsGroupTitle("Accounts and profiles")
-    ArchitectureActionRow(
-        title = "ChatGPT account",
-        subtitle = when {
-            !codexInstalled -> "Codex is still installing"
-            codexSignedIn -> "Signed in · authenticate again"
-            else -> "Sign in with ChatGPT"
-        },
-        icon = null,
-        customIcon = {
-            Image(
-                painter = painterResource(R.drawable.codex_mark),
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
-        },
-        enabled = codexInstalled,
-        onClick = onCodexLogin,
-    )
-    ArchitectureDivider()
-    ArchitectureActionRow(
-        title = "Codex OSS profile",
-        subtitle = if (customConfigured) {
-            "${customProviderHost ?: "Saved provider"} · ${customProvider?.defaultModel?.substringAfterLast('/')}"
-        } else {
-            "Set up an OpenAI-compatible provider"
-        },
-        icon = Icons.Rounded.Tune,
-        enabled = codexInstalled,
-        onClick = onChangeModelProvider,
-    )
+    Spacer(Modifier.height(12.dp))
+    if (providerMode == ModelProviderMode.CODEX) {
+        ArchitectureActionRow(
+            title = "ChatGPT account",
+            subtitle = when {
+                !codexInstalled -> "Codex is still installing"
+                codexSignedIn -> "Signed in · manage authentication"
+                else -> "Sign in to use hosted Codex"
+            },
+            icon = null,
+            customIcon = {
+                Image(
+                    painter = painterResource(R.drawable.codex_mark),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                )
+            },
+            enabled = codexInstalled,
+            onClick = onCodexLogin,
+        )
+    } else {
+        ArchitectureActionRow(
+            title = "Endpoint & model",
+            subtitle = if (customConfigured) {
+                "${customProviderHost ?: "Saved provider"} · ${customProvider?.defaultModel?.substringAfterLast('/')}"
+            } else {
+                "Set up an OpenAI-compatible provider"
+            },
+            icon = Icons.Rounded.Tune,
+            enabled = codexInstalled,
+            onClick = onChangeModelProvider,
+        )
+    }
 
     val pending = pendingProviderMode
     if (pending != null || pendingProviderSetup) {
@@ -466,6 +454,83 @@ private fun AccountAndModelsSettings(
                 pendingProviderSetup = false
             },
         )
+    }
+}
+
+@Composable
+private fun ProviderSegmentedControl(
+    selected: ModelProviderMode,
+    enabled: Boolean,
+    onSelectCodex: () -> Unit,
+    onSelectCustom: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp))
+            .padding(4.dp)
+            .selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ProviderSegment(
+            label = "Codex",
+            selected = selected == ModelProviderMode.CODEX,
+            enabled = enabled,
+            icon = {
+                Image(
+                    painter = painterResource(R.drawable.codex_mark),
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp),
+                )
+            },
+            modifier = Modifier.weight(1f),
+            onClick = onSelectCodex,
+        )
+        ProviderSegment(
+            label = "Codex OSS",
+            selected = selected == ModelProviderMode.CUSTOM,
+            enabled = enabled,
+            icon = { tint -> Icon(Icons.Rounded.Hub, null, tint = tint, modifier = Modifier.size(19.dp)) },
+            modifier = Modifier.weight(1f),
+            onClick = onSelectCustom,
+        )
+    }
+}
+
+@Composable
+private fun ProviderSegment(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    icon: @Composable (Color) -> Unit,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val contentColor = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+        selected -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        modifier
+            .heightIn(min = 48.dp)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                RoundedCornerShape(11.dp),
+            )
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon(contentColor)
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = contentColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
