@@ -3735,7 +3735,7 @@ private fun ChatScreen(
                 buildString {
                     append("Listening · ${dictationDiagnostics.processor.name}")
                     dictationDiagnostics.realTimeFactor?.let {
-                        append(" · ${String.format(Locale.US, "%.2f×", it)} realtime")
+                        append(" · ${formatRealtimePerformance(it)}")
                     }
                     if (dictationDiagnostics.droppedAudioMillis > 0) {
                         append(" · ${dictationDiagnostics.droppedAudioMillis} ms dropped")

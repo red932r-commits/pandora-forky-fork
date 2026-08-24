@@ -33,6 +33,13 @@ class DictationDiagnosticsTest {
     }
 
     @Test
+    fun realtimePerformanceExplainsSpeedInsteadOfRawTimingRatio() {
+        assertEquals("50× faster than realtime", formatRealtimePerformance(0.02f))
+        assertEquals("about realtime speed", formatRealtimePerformance(1f))
+        assertEquals("2× slower than realtime", formatRealtimePerformance(2f))
+    }
+
+    @Test
     fun fullAudioQueueDropsOldestChunkAndKeepsCurrentSpeech() {
         val queue = ArrayBlockingQueue<ShortArray>(2)
         queue.add(shortArrayOf(1, 1))

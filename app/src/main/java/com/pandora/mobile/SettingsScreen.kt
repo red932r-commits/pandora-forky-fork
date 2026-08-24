@@ -1141,7 +1141,7 @@ private fun dictationDiagnosticsLabel(diagnostics: DictationDiagnostics): String
     return buildString {
         append(if (diagnostics.active) "Live" else "Last")
         append(" ${diagnostics.processor.name} run · ")
-        append(String.format(Locale.US, "%.2f× realtime", realTimeFactor))
+        append(formatRealtimePerformance(realTimeFactor))
         append(" · ")
         if (diagnostics.droppedAudioMillis == 0L) {
             append("no audio dropped")
@@ -1151,8 +1151,23 @@ private fun dictationDiagnosticsLabel(diagnostics: DictationDiagnostics): String
         if (diagnostics.active && diagnostics.bufferedAudioMillis > 0) {
             append(" · ${diagnostics.bufferedAudioMillis} ms queued")
         }
-        append(" · lower is better")
     }
+}
+
+internal fun formatRealtimePerformance(realTimeFactor: Float): String {
+    if (realTimeFactor <= 0f || !realTimeFactor.isFinite()) return "Performance unavailable"
+    if (realTimeFactor in 0.95f..1.05f) return "about realtime speed"
+    return if (realTimeFactor < 1f) {
+        "${formatRealtimeMultiplier(1f / realTimeFactor)}× faster than realtime"
+    } else {
+        "${formatRealtimeMultiplier(realTimeFactor)}× slower than realtime"
+    }
+}
+
+private fun formatRealtimeMultiplier(multiplier: Float): String = if (multiplier >= 10f) {
+    String.format(Locale.US, "%.0f", multiplier)
+} else {
+    String.format(Locale.US, "%.1f", multiplier).trimEnd('0').trimEnd('.')
 }
 
 @Composable
