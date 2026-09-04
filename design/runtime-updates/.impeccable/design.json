@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-04T21:16:31.410Z",
+  "title": "Design System: Pandora runtime updates",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Pandora purple",
+        "tonalRamp": [
+          "oklch(15% 0.1951 283.9)",
+          "oklch(26.43% 0.1951 283.9)",
+          "oklch(37.86% 0.1951 283.9)",
+          "oklch(49.29% 0.1951 283.9)",
+          "oklch(60.71% 0.1951 283.9)",
+          "oklch(72.14% 0.1951 283.9)",
+          "oklch(83.57% 0.1951 283.9)",
+          "oklch(95% 0.1951 283.9)"
+        ]
+      },
+      "on-primary": {
+        "role": "primary",
+        "displayName": "White action text",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(26.43% 0.0000 0.0)",
+          "oklch(37.86% 0.0000 0.0)",
+          "oklch(49.29% 0.0000 0.0)",
+          "oklch(60.71% 0.0000 0.0)",
+          "oklch(72.14% 0.0000 0.0)",
+          "oklch(83.57% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "primary-container": {
+        "role": "primary",
+        "displayName": "Pale purple",
+        "tonalRamp": [
+          "oklch(15% 0.0352 292.8)",
+          "oklch(26.43% 0.0352 292.8)",
+          "oklch(37.86% 0.0352 292.8)",
+          "oklch(49.29% 0.0352 292.8)",
+          "oklch(60.71% 0.0352 292.8)",
+          "oklch(72.14% 0.0352 292.8)",
+          "oklch(83.57% 0.0352 292.8)",
+          "oklch(95% 0.0352 292.8)"
+        ]
+      },
+      "on-primary-container": {
+        "role": "primary",
+        "displayName": "Deep purple ink",
+        "tonalRamp": [
+          "oklch(15% 0.1281 283.4)",
+          "oklch(26.43% 0.1281 283.4)",
+          "oklch(37.86% 0.1281 283.4)",
+          "oklch(49.29% 0.1281 283.4)",
+          "oklch(60.71% 0.1281 283.4)",
+          "oklch(72.14% 0.1281 283.4)",
+          "oklch(83.57% 0.1281 283.4)",
+          "oklch(95% 0.1281 283.4)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Warm surface",
+        "tonalRamp": [
+          "oklch(15% 0.0040 106.5)",
+          "oklch(26.43% 0.0040 106.5)",
+          "oklch(37.86% 0.0040 106.5)",
+          "oklch(49.29% 0.0040 106.5)",
+          "oklch(60.71% 0.0040 106.5)",
+          "oklch(72.14% 0.0040 106.5)",
+          "oklch(83.57% 0.0040 106.5)",
+          "oklch(95% 0.0040 106.5)"
+        ]
+      },
+      "on-surface": {
+        "role": "neutral",
+        "displayName": "Dark ink",
+        "tonalRamp": [
+          "oklch(15% 0.0041 128.7)",
+          "oklch(26.43% 0.0041 128.7)",
+          "oklch(37.86% 0.0041 128.7)",
+          "oklch(49.29% 0.0041 128.7)",
+          "oklch(60.71% 0.0041 128.7)",
+          "oklch(72.14% 0.0041 128.7)",
+          "oklch(83.57% 0.0041 128.7)",
+          "oklch(95% 0.0041 128.7)"
+        ]
+      },
+      "on-surface-variant": {
+        "role": "neutral",
+        "displayName": "Muted ink",
+        "tonalRamp": [
+          "oklch(15% 0.0111 119.8)",
+          "oklch(26.43% 0.0111 119.8)",
+          "oklch(37.86% 0.0111 119.8)",
+          "oklch(49.29% 0.0111 119.8)",
+          "oklch(60.71% 0.0111 119.8)",
+          "oklch(72.14% 0.0111 119.8)",
+          "oklch(83.57% 0.0111 119.8)",
+          "oklch(95% 0.0111 119.8)"
+        ]
+      },
+      "outline": {
+        "role": "neutral",
+        "displayName": "Soft outline",
+        "tonalRamp": [
+          "oklch(15% 0.0095 113.2)",
+          "oklch(26.43% 0.0095 113.2)",
+          "oklch(37.86% 0.0095 113.2)",
+          "oklch(49.29% 0.0095 113.2)",
+          "oklch(60.71% 0.0095 113.2)",
+          "oklch(72.14% 0.0095 113.2)",
+          "oklch(83.57% 0.0095 113.2)",
+          "oklch(95% 0.0095 113.2)"
+        ]
+      },
+      "outline-variant": {
+        "role": "neutral",
+        "displayName": "Subtle divider",
+        "tonalRamp": [
+          "oklch(15% 0.0080 106.6)",
+          "oklch(26.43% 0.0080 106.6)",
+          "oklch(37.86% 0.0080 106.6)",
+          "oklch(49.29% 0.0080 106.6)",
+          "oklch(60.71% 0.0080 106.6)",
+          "oklch(72.14% 0.0080 106.6)",
+          "oklch(83.57% 0.0080 106.6)",
+          "oklch(95% 0.0080 106.6)"
+        ]
+      },
+      "error": {
+        "role": "neutral",
+        "displayName": "Error red",
+        "tonalRamp": [
+          "oklch(15% 0.1646 24.6)",
+          "oklch(26.43% 0.1646 24.6)",
+          "oklch(37.86% 0.1646 24.6)",
+          "oklch(49.29% 0.1646 24.6)",
+          "oklch(60.71% 0.1646 24.6)",
+          "oklch(72.14% 0.1646 24.6)",
+          "oklch(83.57% 0.1646 24.6)",
+          "oklch(95% 0.1646 24.6)"
+        ]
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "Update selected",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Illustrative light-theme browser translation of the native filled action; native Compose remains authoritative.",
+      "html": "<button class=\"ds-update-primary\">Update selected</button>",
+      "css": ".ds-update-primary{display:block;width:100%;min-height:48px;border:0;border-radius:999px;padding:10px 24px;background:#6654D9;color:#fff;font:500 14px/20px sans-serif;cursor:pointer}.ds-update-primary:hover{filter:brightness(.96)}.ds-update-primary:focus-visible{outline:2px solid #6654D9;outline-offset:3px}.ds-update-primary:active{filter:brightness(.9)}.ds-update-primary:disabled{background:#dededb;color:#999b95;cursor:default}"
+    },
+    {
+      "name": "Check again",
+      "kind": "button",
+      "refersTo": "button-outlined",
+      "description": "Illustrative outlined check/recovery action; width and minimum target reflect the explicit check control.",
+      "html": "<button class=\"ds-update-outlined\">Check again</button>",
+      "css": ".ds-update-outlined{display:block;width:100%;min-height:48px;border:1px solid #D8D9D2;border-radius:999px;padding:10px 24px;background:transparent;color:#6654D9;font:500 14px/20px sans-serif;cursor:pointer}.ds-update-outlined:hover{background:#E9E5FF}.ds-update-outlined:focus-visible{outline:2px solid #6654D9;outline-offset:3px}.ds-update-outlined:active{background:#ded8fa}.ds-update-outlined:disabled{opacity:.38;cursor:default}"
+    },
+    {
+      "name": "Command output disclosure",
+      "kind": "custom",
+      "refersTo": "button-disclosure",
+      "description": "Illustrative interactive browser disclosure. The app uses a Material TextButton and conditional Text.",
+      "html": "<details class=\"ds-update-detail\"><summary>Show command output</summary><p>Example command output</p></details>",
+      "css": ".ds-update-detail{color:#656760;font:400 12px/16px sans-serif}.ds-update-detail summary{display:list-item;width:fit-content;min-height:48px;align-content:center;padding:0 12px;border-radius:999px;color:#6654D9;font:500 14px/20px sans-serif;cursor:pointer}.ds-update-detail summary:hover{background:#E9E5FF}.ds-update-detail summary:focus-visible{outline:2px solid #6654D9;outline-offset:2px}.ds-update-detail summary:active{background:#ded8fa}.ds-update-detail p{overflow-wrap:anywhere}"
+    },
+    {
+      "name": "Available component row",
+      "kind": "custom",
+      "refersTo": "component-row",
+      "description": "Illustrative native row structure: a complete toggle target, title, installed/available versions, and trailing checkbox.",
+      "html": "<label class=\"ds-update-row\"><span class=\"ds-update-copy\"><strong>Codex</strong><span>Installed: 0.147.0</span><span class=\"ds-update-available\">Available: 0.153.3</span></span><input type=\"checkbox\" checked aria-label=\"Update Codex\"></label>",
+      "css": ".ds-update-row{display:flex;gap:8px;min-height:48px;padding:12px 0;border-top:1px solid #E7E7E1;color:#1D1E1C;font:400 14px/20px sans-serif;cursor:pointer}.ds-update-copy{display:flex;flex:1;min-width:0;flex-direction:column;padding:8px 0;color:#656760}.ds-update-copy strong{margin-bottom:4px;color:#1D1E1C;font:500 16px/24px sans-serif}.ds-update-available{color:#6654D9}.ds-update-row input{width:20px;height:20px;margin:12px;accent-color:#6654D9}.ds-update-row:hover{background:#F0F0EB}.ds-update-row:focus-within{outline:2px solid #6654D9;outline-offset:2px}.ds-update-row:active{background:#E9E5FF}"
+    },
+    {
+      "name": "Readable operation status",
+      "kind": "custom",
+      "refersTo": "operation-status",
+      "description": "Illustrative progress state from the real capture. Native Material progress motion and live-region behavior are not simulated by this preview.",
+      "html": "<section class=\"ds-update-status\" aria-live=\"polite\"><progress aria-label=\"Downloading Codex\"></progress><p>Downloading Codex 0.153.3…</p><p class=\"ds-update-context\">You can leave this screen. Progress will continue.</p></section>",
+      "css": ".ds-update-status{color:#656760;font:400 14px/20px sans-serif}.ds-update-status progress{display:block;width:100%;height:4px;accent-color:#6654D9}.ds-update-status p{margin:12px 0 0}.ds-update-status .ds-update-context{margin-top:8px;color:#1D1E1C}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Calm native operation",
+    "overview": "This record applies only to Updates and its integration with Terminal & Linux Settings. It extends Pandora's existing Material 3 interface and restrained purple identity. It does not establish a replacement app-wide system. The direction is Operate: help a user check installed tools, review consequences, run maintenance, and understand the result.\n\nImplementation is the authority: [RuntimeUpdatesScreen.kt](../../app/src/main/java/com/pandora/mobile/RuntimeUpdatesScreen.kt), [SettingsArchitecture.kt](../../app/src/main/java/com/pandora/mobile/SettingsArchitecture.kt), [ImpactPreflight.kt](../../app/src/main/java/com/pandora/mobile/ImpactPreflight.kt), and [PandoraTheme.kt](../../app/src/main/java/com/pandora/mobile/PandoraTheme.kt). The frontmatter records observed light-theme roles and repeated native spacing in dp. Theme selection and remaining Material defaults stay in code. The sidecar contains illustrative browser translations for documentation; its CSS, interaction states, and synthesized tonal ramps are not Android implementation tokens.",
+    "keyCharacteristics": [
+      "Plain rows with installed and available versions.",
+      "A readable operation summary with optional technical detail.",
+      "Explicit session-stop confirmation and bounded recovery."
+    ],
+    "rules": [
+      {
+        "name": "The State in Words Rule",
+        "body": "Version, readiness, progress, and error meaning remain explicit in text; color supplements them.",
+        "section": "colors"
+      },
+      {
+        "name": "The Summary First Rule",
+        "body": "Keep operation meaning in the normal body role; reserve smaller text and disclosures for technical output.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "**Do** use the existing Material theme and semantic type roles.",
+      "**Do** keep operation summaries visible when diagnostics are collapsed.",
+      "**Do** state session interruption and recovery limits before confirmation.",
+      "**Do** distinguish actual operation evidence from saved-status UI fixtures."
+    ],
+    "donts": [
+      "**Don't** turn this Settings extension into a new app-wide visual identity.",
+      "**Don't** imply executable rollback restores Debian packages or Codex data.",
+      "**Don't** replace operation meaning with raw command output.",
+      "**Don't** treat illustrative browser previews as native accessibility or rendering verification."
+    ]
+  }
+}

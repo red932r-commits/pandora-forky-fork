@@ -19,7 +19,8 @@ class RootfsInstaller(private val context: Context) {
     val workspace = File(context.filesDir, "linux-workspace")
     val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
     val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
-    val tempDir = File(context.cacheDir, "proot-tmp")
+    // PRoot needs these files throughout a session; Android may evict cache during a large update.
+    val tempDir = File(context.noBackupFilesDir, "proot-tmp")
     private val marker = File(rootfs, ".pandora-rootfs-v2")
     private val defaultPackagesMarker = File(rootfs, ".pandora-default-packages-v5")
 
@@ -28,8 +29,9 @@ class RootfsInstaller(private val context: Context) {
             defaultPackagesMarker.isFile &&
             File(workspace, ".local/bin/codex").exists()
 
-    fun installIfNeeded(onStatus: (String) -> Unit) {
+    fun installIfNeeded(onStatus: (String) -> Unit) = runtimeAccess.access {
         synchronized(INSTALL_LOCK) {
+            if (!isSetupComplete()) assertNoPendingPackageCommand()
             tempDir.mkdirs()
             ensurePersistentWorkspace(onStatus)
             ensureAgentKnowledge()
@@ -397,7 +399,8 @@ class RootfsInstaller(private val context: Context) {
         *executableAndArgs,
     )
 
-    internal fun startContainerProcess(command: List<String>, mergeError: Boolean): Process {
+    internal fun startContainerProcess(command: List<String>, mergeError: Boolean, packageCommand: Boolean = false): Process = runtimeAccess.startProcess {
+        check(tempDir.mkdirs() || tempDir.isDirectory) { "Could not prepare Linux temporary storage" }
         val processIdentity = UUID.randomUUID().toString()
         val process = ProcessBuilder(command).redirectErrorStream(mergeError).apply {
             environment().apply {
@@ -420,10 +423,11 @@ class RootfsInstaller(private val context: Context) {
                 // "Allow USB debugging?" dialog. Pandora uses explicit TLS pairing.
                 put("ADB_LOCAL_TRANSPORT_MAX_PORT", "0")
                 put(PROCESS_IDENTITY_ENV, processIdentity)
+                if (packageCommand) put(PACKAGE_COMMAND_ENV, "1")
             }
         }.start()
         synchronized(PROCESS_IDENTITIES) { PROCESS_IDENTITIES[process] = processIdentity }
-        return process
+        process
     }
 
     /** PRoot's launcher can exit without terminating its Node/Codex descendants. */
@@ -495,8 +499,18 @@ class RootfsInstaller(private val context: Context) {
         runCatching { Os.kill(pid, android.system.OsConstants.SIGKILL) }
     }
 
+    /** PRoot descendants can outlive Android's app process. Do not overlap an orphaned installer. */
+    internal fun assertNoPendingPackageCommand() {
+        check(ownProcessDirectories().none { directory ->
+            runCatching {
+                File(directory, "environ").readBytes().toString(Charsets.UTF_8).split('\u0000')
+                    .contains("$PACKAGE_COMMAND_ENV=1")
+            }.getOrDefault(false)
+        }) { "A previous Linux package command is still running. Let it finish, then try again." }
+    }
+
     private fun runContainerCommand(command: List<String>): Pair<Int, String> {
-        val process = startContainerProcess(command, mergeError = true)
+        val process = startContainerProcess(command, mergeError = true, packageCommand = true)
         val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         return process.waitFor() to output
     }
@@ -602,6 +616,7 @@ class RootfsInstaller(private val context: Context) {
     private companion object {
         const val TAG = "RootfsInstaller"
         const val PROCESS_IDENTITY_ENV = "PANDORA_PROCESS_ID"
+        const val PACKAGE_COMMAND_ENV = "PANDORA_PACKAGE_COMMAND"
         const val PANDORA_PROVIDER_ID = "pandora_byom"
         const val PANDORA_API_KEY_ENV = "PANDORA_MODEL_API_KEY"
         val PANDORA_AGENT_INTEGRATION_HEADINGS = listOf(

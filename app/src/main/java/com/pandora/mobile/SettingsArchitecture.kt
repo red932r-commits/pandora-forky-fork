@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -93,6 +94,7 @@ import kotlinx.coroutines.withContext
 internal enum class SettingsDestination(val title: String) {
     ACCOUNT_MODELS("Account & models"),
     TERMINAL_LINUX("Terminal & Linux"),
+    RUNTIME_UPDATES("Updates"),
     STORAGE_RECOVERY("Storage & recovery"),
     APPEARANCE("Appearance"),
     DIAGNOSTICS("Diagnostics"),
@@ -112,7 +114,6 @@ internal fun SettingsScreen(
     onCodexLogin: () -> Unit,
     onModelProviderChanged: (ModelProviderMode) -> Unit,
     onChangeModelProvider: () -> Unit,
-    onStopAllForRepair: () -> Unit,
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as PandoraApplication
@@ -122,7 +123,9 @@ internal fun SettingsScreen(
         SettingsDestination.entries.firstOrNull { it.name == name }
     }
     val navigateBack = {
-        if (destination == null || directEntry) onBack() else destinationName = null
+        if (destination == SettingsDestination.RUNTIME_UPDATES && initialDestination != SettingsDestination.RUNTIME_UPDATES) {
+            destinationName = SettingsDestination.TERMINAL_LINUX.name
+        } else if (destination == null || directEntry) onBack() else destinationName = null
     }
     BackHandler(enabled = destination != null) { navigateBack() }
 
@@ -146,8 +149,9 @@ internal fun SettingsScreen(
             SettingsDestination.TERMINAL_LINUX -> TerminalAndLinuxSettings(
                 activeChatCount = activeChatCount,
                 activeTerminalCount = activeTerminalCount,
-                onStopAllForRepair = onStopAllForRepair,
+                onUpdates = { destinationName = SettingsDestination.RUNTIME_UPDATES.name },
             )
+            SettingsDestination.RUNTIME_UPDATES -> RuntimeUpdatesSettings(activeChatCount, activeTerminalCount)
             SettingsDestination.STORAGE_RECOVERY -> StorageAndRecoverySettings(
                 workspaceCoordinator = application.workspaceCoordinator,
                 activeChatCount = activeChatCount,
@@ -596,15 +600,14 @@ private fun ProviderChoice(
 private fun TerminalAndLinuxSettings(
     activeChatCount: Int,
     activeTerminalCount: Int,
-    onStopAllForRepair: () -> Unit,
+    onUpdates: () -> Unit,
 ) {
     val context = LocalContext.current
+    val app = context.applicationContext as PandoraApplication
+    val maintenance by app.runtimeUpdates.state.collectAsState()
+    val workspaceBusy by app.workspaceCoordinator.busy.collectAsState()
     var fontSize by remember { mutableFloatStateOf(AppSettings.terminalFontSize(context)) }
     var showRepairPreflight by remember { mutableStateOf(false) }
-    var repairing by remember { mutableStateOf(false) }
-    var repairStatus by remember { mutableStateOf<String?>(null) }
-    var repairError by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
     fun updateFontSize(value: Float) {
         fontSize = value.roundToInt().toFloat().coerceIn(
@@ -653,8 +656,15 @@ private fun TerminalAndLinuxSettings(
 
     Spacer(Modifier.height(28.dp))
     SettingsGroupTitle("Linux container")
+    ArchitectureActionRow(
+        title = "Updates",
+        subtitle = if (maintenance.busy) maintenance.status else "Check and update Codex, Debian packages, and zmx",
+        icon = Icons.Rounded.SystemUpdateAlt,
+        onClick = onUpdates,
+    )
+    Spacer(Modifier.height(12.dp))
     Text(
-        "Maintenance resets Debian system files while keeping your persistent /root workspace.",
+        "Repair reinstalls Debian system files while keeping your persistent /root workspace.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 13.sp,
         lineHeight = 18.sp,
@@ -664,17 +674,15 @@ private fun TerminalAndLinuxSettings(
         title = "Repair Linux container",
         subtitle = "Stop sessions, reinstall system files, and keep project data",
         icon = Icons.Rounded.Build,
-        enabled = !repairing,
+        enabled = !maintenance.busy && !workspaceBusy,
         onClick = {
-            repairError = null
             showRepairPreflight = true
         },
     )
-    repairStatus?.let { status ->
-        Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    if (maintenance.busy || maintenance.operation == RuntimeOperation.REPAIR) {
+        Text(maintenance.status, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
-
-    repairError?.let { error ->
+    maintenance.error?.takeIf { maintenance.operation == RuntimeOperation.REPAIR }?.let { error ->
         Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
     }
 
@@ -683,23 +691,7 @@ private fun TerminalAndLinuxSettings(
             preflight = repairPreflight(activeChatCount, activeTerminalCount),
             onConfirm = {
                 showRepairPreflight = false
-                repairing = true
-                repairStatus = "Preparing repair…"
-                repairError = null
-                onStopAllForRepair()
-                scope.launch {
-                    runCatching {
-                        withContext(Dispatchers.IO) {
-                            RootfsInstaller(context.applicationContext).repair { repairStatus = it }
-                        }
-                    }.onSuccess {
-                        repairing = false
-                        repairStatus = "Repair complete"
-                    }.onFailure { error ->
-                        repairing = false
-                        repairError = "Repair failed: ${error.message}"
-                    }
-                }
+                app.runtimeUpdates.repairLinux()
             },
             onDismiss = { showRepairPreflight = false },
         )

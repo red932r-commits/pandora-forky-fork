@@ -31,7 +31,8 @@ class LinuxSessionService : Service() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.app_icon)
             .setContentTitle("Pandora workspace is running")
-            .setContentText("Tap to return to your Codex agent or terminal")
+            .setContentText(if (maintenanceActive) "Linux maintenance is running. Tap to return to Pandora."
+                else "Tap to return to your Codex agent or terminal")
             .setContentIntent(openPandora)
             .setOngoing(true)
             .build()
@@ -46,7 +47,7 @@ class LinuxSessionService : Service() {
             app.chatSessions.stopAll()
             app.terminalSessions.stopAll()
         }
-        stopSelf()
+        if (!maintenanceActive) stopSelf()
         super.onTaskRemoved(rootIntent)
     }
 
@@ -56,6 +57,13 @@ class LinuxSessionService : Service() {
 
         @Volatile private var terminalActive = false
         @Volatile private var chatActive = false
+        @Volatile private var maintenanceActive = false
+
+        @Synchronized
+        internal fun setMaintenanceActive(context: Context, active: Boolean) {
+            maintenanceActive = active
+            refresh(context)
+        }
 
         @Synchronized
         fun setTerminalActive(context: Context, active: Boolean) {
@@ -70,7 +78,7 @@ class LinuxSessionService : Service() {
         }
 
         private fun refresh(context: Context) {
-            if (terminalActive || chatActive) {
+            if (terminalActive || chatActive || maintenanceActive) {
                 ContextCompat.startForegroundService(context, Intent(context, LinuxSessionService::class.java))
             } else {
                 context.stopService(Intent(context, LinuxSessionService::class.java))

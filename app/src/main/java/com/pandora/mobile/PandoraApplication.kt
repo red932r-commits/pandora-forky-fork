@@ -20,8 +20,10 @@ class PandoraApplication : Application() {
             chatSessions = chatSessions,
             terminalSessions = terminalSessions,
             adbPlugin = adbPlugin,
+            installer = com.pandora.mobile.linux.RootfsInstaller(this),
         )
     }
+    internal val runtimeUpdates: RuntimeUpdateManager by lazy { RuntimeUpdateManager(this, workspaceCoordinator) }
 
     override fun onCreate() {
         super.onCreate()

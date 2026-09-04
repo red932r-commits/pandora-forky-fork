@@ -553,10 +553,6 @@ private fun PandoraApp() {
                         onChangeModelProvider = {
                             screen = Screen.CustomProvider
                         },
-                        onStopAllForRepair = {
-                            chatManager.stopAll()
-                            sessionManager.stopAll()
-                        },
                     )
                     Screen.Voice -> VoiceSettingsScreen(onBack = { screen = voiceReturnScreen })
                     Screen.CustomProvider -> CustomProviderOnboarding(

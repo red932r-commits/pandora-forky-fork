@@ -79,19 +79,20 @@ class ManagedTerminalSession internal constructor(
         outputScope.cancel()
         return if (killPersistent) {
             thread(name = "zmx-kill-$persistentSessionName", isDaemon = true) {
-                runCatching {
-                    val installer = RootfsInstaller(appContext)
-                    val process = installer.startContainerProcess(
-                        installer.containerCommand(
-                            "/root/.local/bin/zmx",
-                            "kill",
-                            persistentSessionName,
-                            "--force",
-                        ),
-                        mergeError = true,
-                    )
-                    process.inputStream.close()
-                    process.waitFor()
+                com.pandora.mobile.linux.runtimeAccess.cleanup {
+                    runCatching {
+                        val installer = RootfsInstaller(appContext)
+                        val process = installer.startContainerProcess(
+                            installer.containerCommand("/root/.local/bin/zmx", "kill", persistentSessionName, "--force"),
+                            mergeError = true,
+                        )
+                        try {
+                            process.inputStream.close()
+                            check(process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) { "Terminal cleanup timed out" }
+                        } finally {
+                            if (process.isAlive) installer.terminateProcessTree(process)
+                        }
+                    }
                 }
             }
         } else {

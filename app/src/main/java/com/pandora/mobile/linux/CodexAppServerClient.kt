@@ -21,11 +21,15 @@ internal class CodexAppServerClient(context: Context) {
         params: JSONObject? = null,
         timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS,
         prepareInstallation: Boolean = true,
+        executablePath: String = "/root/.local/bin/codex",
+        isolatedHome: String? = null,
         fallbackError: String,
     ): JSONObject {
         if (prepareInstallation) installer.installIfNeeded { }
         val process = installer.startContainerProcess(
-            installer.containerCommand("/root/.local/bin/codex", "app-server"),
+            installer.containerCommand(*(if (isolatedHome == null) emptyList() else
+                listOf("/usr/bin/env", "CODEX_HOME=$isolatedHome"))
+                .plus(listOf(executablePath, "app-server")).toTypedArray()),
             mergeError = false,
         )
         val stderrDrainer = thread(name = "codex-rpc-stderr", isDaemon = true) {
@@ -44,6 +48,11 @@ internal class CodexAppServerClient(context: Context) {
                 val response = responseReader.submit<JSONObject> {
                     process.inputStream.bufferedReader().useLines { lines ->
                         lines.mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+                            .onEach { response ->
+                                if (response.optInt("id", -1) == INITIALIZE_ID) {
+                                    check(!response.has("error")) { "Codex app-server initialization failed" }
+                                }
+                            }
                             .first { it.optInt("id", -1) == REQUEST_ID }
                     }
                 }.get(timeoutSeconds, TimeUnit.SECONDS)

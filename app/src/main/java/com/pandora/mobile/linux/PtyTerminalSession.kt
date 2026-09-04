@@ -52,15 +52,17 @@ class PtyTerminalSession(
                 val command = buildCommand()
                 val environment = buildEnvironment()
                 val outPid = IntArray(1)
-                val fd = PtyBridge.forkExec(
-                    installer.proot.absolutePath,
-                    command.toTypedArray(),
-                    environment.map { (key, value) -> "$key=$value" }.toTypedArray(),
-                    installer.nativeLibDir.absolutePath,
-                    cols,
-                    rows,
-                    outPid,
-                )
+                val fd = runtimeAccess.access {
+                    PtyBridge.forkExec(
+                        installer.proot.absolutePath,
+                        command.toTypedArray(),
+                        environment.map { (key, value) -> "$key=$value" }.toTypedArray(),
+                        installer.nativeLibDir.absolutePath,
+                        cols,
+                        rows,
+                        outPid,
+                    )
+                }
                 check(fd >= 0) { "Could not create terminal (errno ${-fd})" }
                 masterFd = fd
                 childPid = outPid[0]

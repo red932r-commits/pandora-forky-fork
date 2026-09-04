@@ -6,6 +6,19 @@ All notable changes to Pandora are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Update Codex, Debian packages, and zmx from Settings → Terminal & Linux → Updates, with version checks, package previews, and explicit session-impact confirmation.
+- Stage and verify Codex/zmx updates before activation, retain previous executables for rollback, and offer recovery for unfinished Debian package configuration.
+- Keep update progress alive across navigation and report interrupted maintenance after an app restart.
+
+### Fixed
+
+- Coordinate updates, backups, restores, and Linux repair with a shared maintenance gate that blocks new runtime processes and waits for existing commands to finish.
+- Run Linux repair outside the settings screen lifecycle and report missing required packages instead of a successful repair.
+- Download and verify the complete native Codex release package, avoiding npm's optional-dependency installation failures under PRoot.
+- Keep PRoot working files outside Android's evictable cache so large updates do not disrupt running terminals.
+
 ## 0.1.5 - 2026-08-17
 
 ### Added

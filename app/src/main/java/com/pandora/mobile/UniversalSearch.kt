@@ -116,6 +116,7 @@ internal enum class UniversalSettingsDestination(
         "Backups, restore, repair, and data usage",
         SettingsDestination.STORAGE_RECOVERY,
     ),
+    UPDATES("Updates", "Update Codex, Debian packages, and persistent terminals", SettingsDestination.RUNTIME_UPDATES),
     APPEARANCE("Appearance", "Theme and display preferences", SettingsDestination.APPEARANCE),
     DIAGNOSTICS("Diagnostics", "Logs, health checks, and build information", SettingsDestination.DIAGNOSTICS),
 }

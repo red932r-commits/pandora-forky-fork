@@ -77,6 +77,24 @@ Pandora also installs global Codex guidance at `/root/.codex/AGENTS.md` from the
 
 The local agent API is documented in [docs/agent-bridge.md](docs/agent-bridge.md).
 
+### Updating Linux tools
+
+Open **Settings → Terminal & Linux → Updates**, then tap **Check for updates**.
+Select Codex, Debian packages, or persistent terminals (zmx), review the available
+versions and Debian package changes, and tap **Update selected**. The confirmation
+explains which sessions will stop. Updates continue when you leave Settings.
+
+Codex and zmx are staged and checked before activation. **Restore previous Codex**
+and **Restore previous zmx** reactivate their saved executables; they do not roll
+back application data. Debian upgrades preserve additional installed packages and
+stay within the configured distribution release, with no automatic package
+rollback. If an installation is interrupted, check again and use **Finish package
+setup** when offered. See [runtime updates](docs/runtime-updates.md) for details.
+
+Pandora's Android code, PRoot, and bundled native libraries still require a new
+APK. **Repair Linux container** is a recovery action that resets Debian system
+files and additional apt packages; it is not an update action.
+
 Workspace backups are portable ZIP files containing the complete persistent `/root`. They therefore contain sensitive Codex and GitHub sessions and should be stored accordingly. Restore validates and extracts into staging before atomically replacing the current workspace.
 
 Speech models are not bundled in the APK. Choose and download them from Settings → Voice. Downloads are stored in Pandora's private app storage, inference does not use the network, and each recognizer or voice engine is released after use to keep memory pressure low on older phones.
