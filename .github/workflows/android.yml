@@ -31,7 +31,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-       - name: Build APK
+      - name: Build APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Upload development APK
